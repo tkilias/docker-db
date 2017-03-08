@@ -38,7 +38,7 @@ In order to list all existing clusters you can use `exadt list-clusters`:
 ```console
 $ exadt list-clusters
  CLUSTER                     ROOT                                       IMAGE                    
- MyCluster                        /home/user/MyCluster                            exabase:6.0.beta3
+ MyCluster                   /home/user/MyCluster                       exabase:6.0.beta3
 ```
 
 ## Initializing a cluster
