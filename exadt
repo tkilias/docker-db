@@ -1,0 +1,529 @@
+#! /usr/bin/env python2.7
+
+import sys, os, argparse, pprint
+sys.path.insert(0, '.')
+
+from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, utils
+from shutil import rmtree
+
+#{{{
+def confirm(msg):
+    """
+    Asks the user for confirmation.
+    """
+
+    choice = ""
+    while choice not in set(['y','Y','n','N']):
+        choice = raw_input("%s (y/n): " % msg).lower()
+    return choice == 'y'
+#}}}
+
+#{{{ Cluster started
+def cluster_started(root):
+    """
+    Checks if the cluster with the given root has been started
+    (i. e. there are containers of this cluster).
+    """
+    try:
+        exaconf = EXAConf.EXAConf(root, False)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1)
+    # EXAConf may be un-inititalized if delete-cluster is
+    # called directly after create-cluster
+    if not exaconf.is_initialized():
+        return False
+    try:
+        # validate manually if initialized (see above)
+        exaconf.validate()
+        dh = docker_handler.docker_handler(False)
+        dh.set_exaconf(exaconf)
+        res = dh.cluster_started()
+    except docker_handler.DockerError as e:
+        print e
+        sys.exit(1)
+    return res
+#}}}
+
+# {{{ Create cluster
+def create_cluster(cmd):
+    conf = exadt_conf.exadt_conf()
+    # create root-directory if requested
+    if cmd.create_root:
+        try: 
+            os.makedirs(cmd.root)
+        except OSError:
+            if not os.path.isdir(cmd.root):
+                print "Failed to create root-directory '%s'!" % cmd.root
+                raise
+    elif not os.path.isdir(cmd.root):
+        print "Root directory '%s' does not exist (or is a file)!" % cmd.root
+        sys.exit(1)
+    # create entry in config
+    try:
+        conf.create_cluster(cmd.cluster, cmd.root)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+#}}}    
+
+# {{{ Delete cluster
+def delete_cluster(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    # check if has been started (i. e. containers exist)
+    if cluster_started(root):
+        print "Cluster '%s' has existing containers. It has to be stopped before it can be deleted!" % cmd.cluster
+        sys.exit(1)
+    # ask for confirmation
+    msg = "Do you really want to delete cluster '%s'%s? " % \
+            (cmd.cluster, " (and all file-devices)" if not (cmd.keep_root or cmd.keep_mapped_devices) else "")
+    if not confirm(msg):
+        print "Aborted."
+        sys.exit(1)
+
+    # check if cluster has been initialized (may be un-initialized 
+    # if delete-cluster is called directly after create-cluster)
+    initialized = False
+    try:
+        exaconf = EXAConf.EXAConf(root, False)
+        initialized = exaconf.is_initialized()
+    except EXAConf.EXAConfError as e:
+        print e
+        # interpret exception as "not initialized" and proceed
+
+    # delete mapped devices if not prevented
+    # --> we delete the complete '$hostname' directories (they are created automatically)
+    if initialized and not cmd.keep_mapped_devices:
+        try:
+            # validate manually if initalized
+            exaconf.validate()
+            nodes_conf = exaconf.get_nodes_conf()
+        except EXAConf.EXAConfError as e:
+            print e
+        for node in nodes_conf.itervalues():
+            for disk in node.disks.itervalues():
+                if disk.has_key("mapping"):
+                    for dev,path in disk.mapping:
+                        try:
+                            # follow symlink
+                            path = os.path.realpath(path)
+                            # path can also be a file within '$hostname/'!
+                            if os.path.isfile(path):
+                                path = os.path.dirname(path)
+                            print "Deleting directory '%s'." % path
+                            rmtree(path, True)
+                        except OSError as e:
+                            print "Failed to delete '%s': %s." % (path, e)
+    # delete root-dir if not prevented
+    if not cmd.keep_root:
+        print "Deleting root directory '%s'." % root
+        rmtree(root, True)
+    # delete entry from config
+    conf.delete_cluster(cmd.cluster)
+#}}}    
+
+# {{{ Init cluster
+def init_cluster(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    # check if root actually exists
+    if not os.path.isdir(root):
+        print "Root directory '%s' does not exist (or is a file)!" % root
+        sys.exit(1)
+    # check params
+    if cmd.device_type and cmd.device_type not in ['block','file']:
+        print "Device-type must be 'block' or 'file'!" 
+        sys.exit(1)
+    # check and re-init root if requested
+    files = os.listdir(root)
+    if files:
+        if cmd.force:
+            for e in files:
+                name = os.path.join(root, e)
+                if os.path.isdir(name):
+                    rmtree(name)
+                else:
+                    os.unlink(name)
+        else:
+            print "Root directory '%s' is not empty! Use --force to force re-initialization." % root
+            sys.exit(1)
+    # create EXAConf
+    try:
+        exaconf = EXAConf.EXAConf(root, False)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1)
+    # create directory structure
+    for node in range(0,cmd.num_nodes):
+        node_root = os.path.join(root, exaconf.node_root_prefix + str(10+node))
+        os.makedirs(node_root)
+        os.makedirs(os.path.join(node_root, exaconf.etc_dir))
+        os.makedirs(os.path.join(node_root, exaconf.md_dir))
+        os.makedirs(os.path.join(node_root, exaconf.md_storage_dir))
+        os.makedirs(os.path.join(node_root, exaconf.md_dwad_dir))
+        os.makedirs(os.path.join(node_root, exaconf.log_dir))
+        os.makedirs(os.path.join(node_root, exaconf.logd_dir))
+        os.makedirs(os.path.join(node_root, exaconf.data_dir))
+        os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir))
+        os.makedirs(os.path.join(node_root, exaconf.storage_dir))
+        os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
+    # initialize EXAConf
+    exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.license, cmd.device_type, cmd.force, "Docker")
+    
+    print "Successfully initialized root directory '%s'." % root
+#}}}
+
+#{{{ List clusters
+def list_clusters(cmd):
+    conf = exadt_conf.exadt_conf()
+    clusters = conf.get_clusters()
+    print " %- 25s   %- 40s   %- 25s" % ("CLUSTER", "ROOT", "IMAGE")
+    for cluster,root in clusters.items():
+        try:
+            exaconf = EXAConf.EXAConf(root, True)
+            image = exaconf.get_docker_image()
+        except EXAConf.EXAConfError:
+            image = "<uninitialized>"
+        print " %- 25s   %- 40s   %- 25s" % (cluster[:25],os.path.normpath(root[:40]),image)
+#}}}
+
+#{{{ Docker version
+def docker_version(cmd):
+    try:
+        dh = docker_handler.docker_handler(True)
+        pp = pprint.PrettyPrinter()
+        pp.pprint(dh.version())
+    except docker_handler.DockerError as e:
+        print e
+        sys.exit(1)
+#}}}
+
+#{{{ Start cluster
+def start_cluster(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        exaconf = EXAConf.EXAConf(root, True)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1)
+    # call docker handler
+    try:
+        dh = docker_handler.docker_handler(cmd.verbose)
+        dh.set_exaconf(exaconf)
+        dh.start_cluster(cmd.command)
+    except docker_handler.DockerError as e:
+        print e
+        sys.exit(1)
+#}}}
+
+#{{{ Stop cluster
+def stop_cluster(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        exaconf = EXAConf.EXAConf(root, True)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        dh = docker_handler.docker_handler(cmd.verbose)
+        dh.set_exaconf(exaconf)
+        dh.stop_cluster(cmd.timeout)
+    except docker_handler.DockerError as e:
+        print e
+        sys.exit(1)
+#}}}
+
+#{{{ Update cluster
+def update_cluster(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        exaconf = EXAConf.EXAConf(root, True)
+        exaconf.set_docker_image(cmd.image)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1)
+    print "Cluster '%s' has successfully been updated! Restart the cluster to apply the changes." % cmd.cluster
+#}}}
+
+#{{{ ps
+def ps(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        exaconf = EXAConf.EXAConf(root, True)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        dh = docker_handler.docker_handler(False)
+        dh.set_exaconf(exaconf)
+        containers = dh.get_all_containers()
+    except docker_handler.DockerError as e:
+        print e
+        sys.exit(1)
+    if cmd.verbose:
+        pprint.pprint(containers)
+    print " %- 10s   %- 29s   %- 25s   %- 15s   %- 12s   %- 20s   %- 20s" % ("NODE ID", "STATUS", "IMAGE", "HOSTNAME", "CONTAINER ID", "CONTAINER NAME", "EXPOSED PORTS")
+    for c in containers:
+        ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if d.has_key('PublicPort') ]
+        ports_str = ",".join([str(p[0]) + "->" + str(p[1]) for p in ports])
+        print " %- 10s   %- 29s   %- 25s   %- 15s   %- 12s   %- 20s   %- 20s" % (c['Labels']['NodeID'], c['Status'][:29], c['Image'][:25],
+                                                                        c['Labels']['Hostname'][:15], c['Id'][:12], 
+                                                                        c['Names'][0].lstrip("/")[:20], ports_str) 
+#}}}
+
+#{{{ Create file devices
+def create_file_devices(cmd):
+    try:
+        conf = exadt_conf.exadt_conf()
+        root = conf.get_root(cmd.cluster)
+    except exadt_conf.ConfError as e:
+        print e
+        sys.exit(1)
+    try:
+        exaconf = EXAConf.EXAConf(root, True)
+    except EXAConf.EXAConfError as e:
+        print e
+        sys.exit(1) 
+    try:
+        byte_size = utils.units2bytes(cmd.size)
+    except RuntimeError as e:
+        print "ERROR:: %s" % e 
+        sys.exit(1)
+    # check if path does exist (do NOT create it)
+    if cmd.path and not os.path.exists(cmd.path):
+        print "ERROR:: Given path '%s' does not exist!" % cmd.path
+        sys.exit(1)
+    # ask user for confirmation if existing devices should be replaced
+    if cmd.replace and not confirm("Do you really want to replace all file-devices of cluster '%s'?" % cmd.cluster):
+        print "Aborted"
+        sys.exit(0)
+    try:
+        devh = device_handler.device_handler(exaconf)
+        devices = devh.create_file_devices(cmd.disk, cmd.num, byte_size, cmd.path, cmd.replace)
+    except device_handler.DeviceError as e:
+        print e
+        sys.exit(1)
+    if devices:
+        if len(devices[1]) > 0:
+            print "The following file devices have been removed:"
+            for nid in devices[1].keys():
+                print "Node %s : %s" % (nid, devices[1][nid])
+        if len(devices[0]) > 0:
+            print "Successfully created the following file devices:"
+            for nid in devices[0].keys():
+                print "Node %s : %s" % (nid, devices[0][nid])
+#}}}
+
+# {{{ Main
+def main():
+    parser = argparse.ArgumentParser(
+            description = 'EXASOL Docker Tool',
+            prog = 'exadt')
+    cmdparser = parser.add_subparsers(
+            title = 'commands',
+            description = 'supported commands')
+
+    # create cluster command
+    parser_cc = cmdparser.add_parser(
+            'create-cluster',
+            help='create a new cluster')
+    parser_cc.add_argument(
+            'cluster', type=str, metavar='NAME',
+            help='a name for the new cluster')
+    parser_cc.add_argument(
+            '--root', '-r',
+            required = True,
+            help='the root directory for the new cluster')
+    parser_cc.add_argument(
+            '--create-root', '-c',
+            action = 'store_true',
+            help='create root directory if it does not exist')
+    parser_cc.set_defaults(func=create_cluster)
+   
+    # delete cluster command
+    parser_dc = cmdparser.add_parser(
+            'delete-cluster',
+            help='delete an existing cluster from the config (and clear data in its root directory)')
+    parser_dc.add_argument(
+            'cluster', type=str, metavar='CLUSTER',
+            help='name of the cluster')
+    parser_dc.add_argument(
+            '--keep-root', '-k',
+            action = 'store_true',
+            help='keep root directory and contents (default: delete it)')
+    parser_dc.add_argument(
+            '--keep-mapped-devices', '-d',
+            action = 'store_true',
+            help='keep mapped devices, i. e. file-devices outside of the root directory (default: delete them)')
+    parser_dc.set_defaults(func=delete_cluster)
+ 
+    # init cluster command
+    parser_ic = cmdparser.add_parser(
+            'init-cluster',
+            help='initialize the configuration and directory structure of a cluster')
+    parser_ic.add_argument(
+            'cluster', type=str, metavar='CLUSTER',
+            help='name of the cluster')
+    parser_ic.add_argument(
+            '--image', '-i',
+            required = True,
+            help='docker image to use')
+    parser_ic.add_argument(
+            '--num-nodes', '-m',
+            required = True,
+            type = int,
+            help = 'nr. of nodes (i. e. containers)')
+    parser_ic.add_argument(
+            '--license', '-l',
+            required = True,
+            help = 'path to the license file')
+    parser_ic.add_argument(
+            '--device-type', '-d',
+            required = True,
+            help = 'the type of EXAStorage device (block | file)')
+    parser_ic.add_argument(
+            '--force', '-f',
+            action = 'store_true',
+            help='force re-initialization of the root directory (if not empty)')
+    parser_ic.set_defaults(func=init_cluster)
+   
+    # list clusters command
+    parser_lc = cmdparser.add_parser(
+            'list-clusters',
+            help='list all existing clusters and their root directory')
+    parser_lc.set_defaults(func=list_clusters)
+    
+    # update cluster command
+    parser_upc = cmdparser.add_parser(
+            'update-cluster',
+            help='update given cluster (by changing the docker image)')
+    parser_upc.add_argument(
+            'cluster', type=str, metavar="CLUSTER",
+            help='name of the cluster to be updated')
+    parser_upc.add_argument(
+            '--image', '-i',
+            required=True,
+            help='the new docker image')
+    parser_upc.set_defaults(func=update_cluster)
+ 
+    # start cluster command
+    parser_sc = cmdparser.add_parser(
+            'start-cluster',
+            help='start given cluster')
+    parser_sc.add_argument(
+            'cluster', type=str, metavar='CLUSTER',
+            help='name of the cluster to be started')
+    parser_sc.add_argument(
+            '--command', '-c',
+            default = "",
+            help='custom start command for all containers (useful for debugging)')
+    parser_sc.add_argument(
+            '--verbose', '-v',
+            action = 'store_true',
+            help='increase output')
+    parser_sc.set_defaults(func=start_cluster)
+  
+    # stop cluster command
+    parser_stc = cmdparser.add_parser(
+            'stop-cluster',
+            help='stop given cluster')
+    parser_stc.add_argument(
+            'cluster', type=str, metavar="CLUSTER",
+            help='name of the cluster to be stopped')
+    parser_stc.add_argument(
+            '--timeout', '-t',
+            default=30,
+            help='seconds to wait for a container to stop before sending SIGKILL (default: 30s)')
+    parser_stc.add_argument(
+            '--verbose', '-v',
+            action = 'store_true',
+            help='increase output')
+    parser_stc.set_defaults(func=stop_cluster)
+   
+    # ps command
+    parser_psc = cmdparser.add_parser(
+            'ps',
+            help='list all containers of the given cluster')
+    parser_psc.add_argument(
+            'cluster', type=str, metavar="CLUSTER",
+            help='name of the cluster')
+    parser_psc.add_argument(
+            '--verbose', '-v',
+            action = 'store_true',
+            help='dump all container info from docker')
+    parser_psc.set_defaults(func=ps)
+     
+    # create file devices command
+    parser_cfdc = cmdparser.add_parser(
+            'create-file-devices',
+            help='create files as storage devices for all nodes of the given cluster')
+    parser_cfdc.add_argument(
+            'cluster', type=str, metavar="CLUSTER",
+            help='name of the cluster')
+    parser_cfdc.add_argument(
+            '--num', '-n',
+            type = int,
+            default = 1,
+            help='nr. of devices (per node) to be created')
+    parser_cfdc.add_argument(
+            '--size', '-s',
+            required = True,
+            type = str,
+            help='size of a device file')
+    parser_cfdc.add_argument(
+            '--disk', '-d',
+            type = str,
+            default = "default",
+            help="storage disk to which the device should be added (default: 'default')")
+    parser_cfdc.add_argument(
+            '--path', '-p',
+            type=str,
+            help='create device-files in given directory instead of default directory')
+    parser_cfdc.add_argument(
+            '--replace', '-r',
+            action='store_true',
+            help='replace existing file-devices instead of adding them')
+    parser_cfdc.set_defaults(func=create_file_devices)
+ 
+    # docker version command
+    parser_dv = cmdparser.add_parser(
+            'docker-version',
+            help='print docker version information')
+    parser_dv.set_defaults(func=docker_version)
+ 
+    command = parser.parse_args()
+    command.func(command)
+
+if __name__ == '__main__':
+    main()
+# }}}
+
