@@ -58,7 +58,13 @@ Successfully initialized root directory '/home/user/MyCluster/'.
 
 This command creates subdirectories for each virtual node in the root directory. These are mounted as docker volumes within each container (at `/exa') and contain all data, metadata and buckets.
 
-It also creates the EXAConf file in the root directory. This file describes the whole cluster and currently has to be edited manually if a non-default setup is used.
+It also creates the EXAConf file in the root directory, which describes the whole cluster and currently has to be edited manually if a non-default setup is used.
+
+### Automatically creating and assigning file devices
+
+The `--auto-storage` option can be used to tell `exadt` to automatically create file-devices for all virtual nodes (within the root directory). These devices are then assigned to the volumes that are also automatically created.
+
+This option needs at least 10GiB of free space and uses up to 100GiB of it for all devices combined. If `--auto-storage` is used, you can skip the next step entirely.
 
 ## Adding EXAStorage devices
 
@@ -71,7 +77,33 @@ Node 10 : ['/home/user/MyCluster/n10/data/storage/dev.1', '/home/user/MyCluster/
 Node 11 : ['/home/user/MyCluster/n11/data/storage/dev.1', '/home/user/MyCluster/n11/data/storage/dev.2']
 ```
 
-This command creates two devices per container, but a single device is sufficient. As you can see, the file devices are created within the `data/storage` subdirectory of each node's docker root. They are created as *sparse files*, i. e. their size is stated as the given size but they actually have size 0 and grow as new data is being written.
+This example creates two devices per container, but a single device is sufficient. As you can see, the file devices are created within the `data/storage` subdirectory of each node's docker root. They are created as *sparse files*, i. e. their size is stated as the given size but they actually have size 0 and grow as new data is being written.
+
+All devices must be assigned to a "disk". A disk is a group of devices that can be assigned to a volume. If omitted, newly created devices will be assinged to the disk named "default".
+
+### Assigning devices to volumes
+
+After creating the devices, they have to be assigned to the corresponding volumes. If you did not use `--auto-storage` (see above), you have to edit EXAConf manually. Open it and locate the following section:
+
+```
+[EXAVolume : DataVolume1]
+    Type = data
+    Nodes = 10, 11
+    Disk =
+    Size =
+    Redundancy = 1
+```
+
+Now add the name of the disk ("default", if you did not specify a name when executing `create-file-devices`) and the volume size, e. g:
+
+```
+    Disk = default
+    Size = 100GiB
+```
+
+Then do the same for "EXAVolume : ArchiveVolume1".
+
+Make sure not to make the volume too big! The specified size is the size that is available for the database, i. e. if the redundancy is 2, the actually used space is doubled! Also make sure to leave some free space for the temporary volume, that is created by the database during startup.
 
 ## Starting a cluster
 
