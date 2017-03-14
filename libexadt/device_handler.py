@@ -21,6 +21,10 @@ class device_handler:
 #{{{ Init
     def __init__(self, ec):
         self.exaconf = ec
+        self.min_auto_free_space = (1024 * 1024 * 1024 * 10)
+        self.max_auto_used_space = self.min_auto_free_space * 10
+        self.auto_reserved_size    = (1024 * 1024 * 50)
+        self.default_disk_name   = "default"
 #}}}
 
 #{{{ Get mount point
@@ -35,6 +39,16 @@ class device_handler:
             # go up one dir
             path = os.path.abspath(os.path.join(path, os.pardir))
         return path
+#}}}
+
+#{{{ Get free space
+    def get_free_space(self, mount_point):
+        """
+        Returns the free space (in bytes) of the given filesystem.
+        """
+            
+        stat = os.statvfs(mount_point)
+        return stat.f_bfree * stat.f_bsize
 #}}}
 
 #{{{ Is mapped device
@@ -104,8 +118,7 @@ class device_handler:
         # compute free space for each mountpoint
         sufficient_free_space = True
         for mount_point in mount_devices.keys():
-            stat = os.statvfs(mount_point)
-            part_free = stat.f_bfree * stat.f_bsize
+            part_free = self.get_free_space(mount_point)
             files_size = sum([os.path.getsize(os.path.realpath(dev)) for dev in mount_devices[mount_point]])
             if part_free < files_size:
                 print "Free space on '%s' is only %s, but accumulated size of (sparse) file-devices is %s!" % (mount_point, bytes2units(part_free), bytes2units(files_size))
@@ -300,7 +313,7 @@ class device_handler:
             # create sub-directory for current node in case a path is given 
             node_path = ""
             if path and path.strip() != "":
-                path = os.path.realpath(path)
+                path = os.path.realpath(os.path.abspath(path))
                 # raise error if path does not exist
                 if not os.path.exists(path):
                     raise DeviceError("'%s' does not exist!" % path)
@@ -318,3 +331,40 @@ class device_handler:
         return (created_devices, deleted_devices)
 #}}}
 
+#{{{ Auto create file devices
+    def auto_create_file_devices(self):
+        """
+        Automatically determines the available free space in the root directory of the current
+        cluster and creates one file device per node with disk name 'default'.
+
+        Throws an exception if the cluster already contains disks and devices.
+        """
+
+        # Get and check available free space in root directory
+        root_free = self.get_free_space(self.get_mount_point(self.exaconf.root))
+        if root_free < self.min_auto_free_space:
+            raise DeviceError("Free space on '%s' is only '%s' but '%s' are required for automatic file-device creation!" % 
+                    (self.exaconf.root, bytes2units(root_free), bytes2units(self.min_auto_free_space)))
+
+        try:
+            nodes_conf = self.exaconf.get_nodes_conf()
+        except EXAConf.EXAConfError as e:
+            raise DeviceError("Failed to read EXAConf: %s" % e)
+
+        # check if the nodes already have disks
+        for node in nodes_conf.values():
+            if len(node.disks) > 0:
+                raise DeviceError("Devices can't be auto-generated because this cluster alreay has disks!") 
+        
+        root_usable = min(root_free - self.auto_reserved_size, self.max_auto_used_space)
+        bytes_per_node = root_usable / len(nodes_conf)
+
+        self.create_file_devices("default", 1, bytes_per_node, "", False)
+
+        try:
+            # leave some room for the temporary volume!
+            self.exaconf.use_disk_for_volumes("default", bytes_per_node * 0.666)
+        except EXAConf.EXAConfError as e:
+            raise DeviceError("Failed to use new disk for the existing volumes: %s" % e)
+
+#}}}

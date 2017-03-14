@@ -1,5 +1,5 @@
-import os, ipaddr, configobj, string, random
-from utils import units2bytes
+import os, ipaddr, configobj
+from utils import units2bytes, bytes2units, gen_base64_passwd
 from collections import OrderedDict as odict
 
 #{{{ Class EXAConfError
@@ -47,10 +47,12 @@ class EXAConf:
         """
 
         # some static params
-        self.version = "6.0.rc2"
-        self.major_version = "6"
-        self.root = "/exa"
-        self.container_root = self.root
+        self.cos_version = "6.0.rc2"
+        self.cos_major_version = "6"
+        # exasolution versions may be overwritten by CLI parameter
+        self.set_exasolution_version(self.cos_version)
+        self.cos_dir = "/usr/opt/EXASuite-6/EXAClusterOS-6.0.rc2"
+        self.container_root = "/exa"
         self.node_root_prefix = "n"
         self.dev_prefix = "dev."
         self.data_dev_suffix  = ".data"
@@ -72,6 +74,7 @@ class EXAConf:
         self.def_bucketfs_http_port = 6583
         self.def_bucketfs_https_port = 0
         # set root to container_root if omitted
+        # --> only true when called from within the container
         if not root:
             self.root = os.path.join(self.container_root, self.etc_dir)
         else:
@@ -96,6 +99,26 @@ class EXAConf:
             self.validate()
 #}}}
 
+#{{{ Set EXASolution version
+    def set_exasolution_version(self, exasolution_version):
+        """
+        Stores the given exasolution version and builds the path to the EXASolution installation 
+        based on the EXASolution version.
+        """
+        self.exasolution_version = exasolution_version.strip()
+        self.exasolution_major_version = self.exasolution_version.split(".")[0]
+        self.exasolution_dir = "/usr/opt/EXASuite-" + self.exasolution_major_version + \
+                               "/EXASolution-" + self.exasolution_version
+#}}}
+
+#{{{ Update EXASolution version
+    def update_exasolution_version(self, exasolution_version):
+        """
+        Replaces all occurences of the EXASolution version number with the given one
+        and commits the configuration (used to update the cluster).
+        """
+#}}}
+
 #{{{ Clear configuration
     def clear_config(self):
         """
@@ -112,6 +135,9 @@ class EXAConf:
         Writes the configuration to disk (into '$RootDir/EXAConf')
         """
         self.config.write()
+        # reload in order to force type conversion 
+        # --> parameters added as lists during runtime are converted back to strings (as if they have been added manually)
+        self.config.reload()
 #}}}
  
 #{{{ Platform supported
@@ -131,7 +157,7 @@ class EXAConf:
 #}}}
 
 #{{{ (Re-)initialize a configuration
-    def initialize(self, name, image, num_nodes, license, device_type, force, platform):
+    def initialize(self, name, image, num_nodes, license, device_type, force, platform, exasolution_version=None):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
@@ -147,6 +173,9 @@ class EXAConf:
         # sanity checks
         if not self.platform_supported(platform):
             raise EXAConfError("Platform '%s' is not supported!") % platform
+        # set exasolution version if given (and modify path)
+        if exasolution_version and exasolution_version != "":
+            self.set_exasolution_version(exasolution_version.strip())
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
@@ -202,10 +231,11 @@ class EXAConf:
         self.config["EXAVolume : DataVolume1"] = {}
         data_vol_sec = self.config["EXAVolume : DataVolume1"]
         data_vol_sec["Type"] = "data"
-        data_vol_sec["Nodes"] = ""
+        data_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
         data_vol_sec["Disk"] = ""
         data_vol_sec["Size"] = ""
-        data_vol_sec["Redundancy"] = ""
+        data_vol_sec["Redundancy"] = "1"
+        data_vol_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
         data_vol_sec["Labels"] = ""
         #comments
         self.config.comments["EXAVolume : DataVolume1"] = ["\n", "An EXAStorage data volume"]
@@ -214,15 +244,17 @@ class EXAConf:
         data_vol_sec.comments["Disk"] = ["Name of the disk to be used for this volume.","This disk must exist on all volume nodes."]
         data_vol_sec.comments["Size"] = ["Volume size (e. g. '1 TiB')"]
         data_vol_sec.comments["Redundancy"] = ["Desired redundancy for this volume"]
+        data_vol_sec.comments["Owner"] = ["Volume owner (user and group ID)"]
         data_vol_sec.comments["Labels"] = ["OPTIONAL: a comma-separated list of labels for this volume"]
         # archive volume
         self.config["EXAVolume : ArchiveVolume1"] = {}
         archive_vol_sec = self.config["EXAVolume : ArchiveVolume1"]
         archive_vol_sec["Type"] = "archive"
-        archive_vol_sec["Nodes"] = ""
+        archive_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
         archive_vol_sec["Disk"] = ""
         archive_vol_sec["Size"] = ""
-        archive_vol_sec["Redundancy"] = ""
+        archive_vol_sec["Redundancy"] = "1"
+        archive_vol_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
         archive_vol_sec["Labels"] = ""
         #comments
         self.config.comments["EXAVolume : ArchiveVolume1"] = ["\n", "An EXAStorage archive volume"]
@@ -232,8 +264,8 @@ class EXAConf:
         db_sec = self.config["DB : DB1"] 
         db_sec["DataVolume"] = "DataVolume1"
         db_sec["ArchiveVolume"] = "ArchiveVolume1"
-        db_sec["Version"] = ""
-        db_sec["Owner"] = "1000:1000"
+        db_sec["Version"] = str(self.exasolution_version)
+        db_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
         db_sec["MemSize"] = '2 GiB'
         db_sec["Port"] = str(self.def_db_port)
         db_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
@@ -247,7 +279,7 @@ class EXAConf:
         # BucketFS section
         self.config["BucketFS"] = {}
         glob_bfs_sec = self.config["BucketFS"]
-        glob_bfs_sec["ServiceOwner"] = "1000:1000"
+        glob_bfs_sec["ServiceOwner"] = str(os.getuid()) + " : " + str(os.getgid())
         #comments
         self.config.comments["BucketFS"] = ["\n","Global BucketFS options"]
         glob_bfs_sec.comments["ServiceOwner"] = ["User and group ID of the BucketFS process."]
@@ -257,7 +289,7 @@ class EXAConf:
         bfs_sec = self.config["BucketFS : %s" % self.def_bucketfs]
         bfs_sec["HttpPort"] = str(self.def_bucketfs_http_port)
         bfs_sec["HttpsPort"] = str(self.def_bucketfs_https_port)
-        bfs_sec["SyncKey"] = self.gen_passwd(32)
+        bfs_sec["SyncKey"] = gen_base64_passwd(32)
         bfs_sec["SyncPeriod"] = "30000"
         # comments
         self.config.comments["BucketFS : bfsdefault"] = ["\n","A Bucket filesystem"]
@@ -268,11 +300,12 @@ class EXAConf:
         # Bucket sub-section
         bfs_sec["Bucket : %s" % self.def_bucket] = {}
         bucket_sec = bfs_sec["Bucket : %s" % self.def_bucket]
-        bucket_sec["ReadPasswd"] = self.gen_passwd(22)
-        bucket_sec["WritePasswd"] = self.gen_passwd(22)
+        bucket_sec["ReadPasswd"] = gen_base64_passwd(22)
+        bucket_sec["WritePasswd"] = gen_base64_passwd(22)
         bucket_sec["Public"] = "True"
         bucket_sec["Name"] = "default"
-        bucket_sec["AdditionalFiles"] = "EXAClusterOS:/exa/packages/ScriptLanguages-*"
+        bucket_sec["AdditionalFiles"] = "EXAClusterOS:" + os.path.join(self.cos_dir, "var/clients/packages/ScriptLanguages-*") + ", " + \
+                                        "EXASolution-" + self.exasolution_version + ":" + os.path.join(self.exasolution_dir, "bin/udf/*")
         # comments
         bfs_sec.comments["Bucket : default"] = ["\n", "A bucket"]
 
@@ -364,15 +397,6 @@ class EXAConf:
         dup = self.get_duplicates(all_pub_nets)
         if dup and len(dup) > 0:
             raise EXAConfError("Detected duplicate public networks: %s!" % dup)
-#}}}
-
-#{{{ Gen passwd
-    def gen_passwd(self, length):
-        """
-        Generates a new password with given length.
-        """
-        key = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(length))
-        return key
 #}}}
 
 #{{{ Check if section is a node
@@ -538,6 +562,28 @@ class EXAConf:
         self.commit()
 #}}}
   
+#{{{ Use disk for volumes
+    def use_disk_for_volumes(self, disk, bytes_per_node, vol_type=None):
+        """
+        Adds the given disk to all volumes of the given type that don't have a disk assigned yet.         
+        The given 'bytes_per_node' space is distributed equally across all suitable volumes.
+        """
+
+        # we only consider volumes without disks
+        filters = {"disk": ""}
+        if vol_type and vol_type != "":
+            filters["type"] = vol_type
+        volumes = self.get_storage_volumes(filters=filters)
+        bytes_per_volume_node = bytes_per_node / len(volumes)
+
+        for volume in volumes.iteritems():
+            vol_sec = self.config["EXAVolume : " + volume[0]]
+            vol_sec["Disk"] = disk
+            vol_sec["Size"] = bytes2units(bytes_per_volume_node / volume[1].redundancy)
+
+        self.commit()
+#}}}
+
 ############################## GETTER #################################
  
 #{{{ Get section ID 
@@ -725,7 +771,7 @@ class EXAConf:
 #}}}
 
 #{{{ Get storage volumes
-    def get_storage_volumes(self):
+    def get_storage_volumes(self, filters=None):
         """
         Returns a config describing all existing EXAStorage volumes.
         """
@@ -733,14 +779,15 @@ class EXAConf:
         for section in self.config.sections:
             if self.is_storage_volume(section):
                 vol_sec = self.config[section]
+                # copy values to config
                 vol_name = self.get_section_id(section)
                 conf = config()
                 conf.name = vol_name
-                conf.type = vol_sec["Type"]
-                conf.disk = vol_sec["Disk"]
+                conf.type = vol_sec["Type"].strip()
+                conf.disk = vol_sec["Disk"].strip()
                 conf.redundancy = vol_sec.as_int("Redundancy")
                 conf.nodes = [ int(n.strip()) for n in vol_sec["Nodes"].split(",") if n.strip() != "" ]
-                conf.size = units2bytes(vol_sec["Size"])
+                conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else -1
                 conf.owner = tuple([ int(x.strip()) for x in vol_sec["Owner"].split(":") if x.strip() != "" ])
                 # optional values
                 if "NumMasterNodes" in vol_sec.scalars:
@@ -761,6 +808,13 @@ class EXAConf:
                 else:
                     conf.stripe_size = conf.block_size * 64
                 volume_configs[vol_name] = conf
+        # filter results if requested
+        if filters:
+            for vol in volume_configs.items(): # use a copy!
+                for f in filters.iteritems():
+                    if f[0] in vol[1].iterkeys() and f[1] != vol[1][f[0]]:
+                        del volume_configs[vol[0]]
+                        break
         return volume_configs
 #}}}
  
@@ -840,10 +894,10 @@ class EXAConf:
         return self.config["Docker"]["Image"]
 #}}}
 
-#{{{ Set docker image
-    def set_docker_image(self, image):
+#{{{ Update docker image
+    def update_docker_image(self, image):
         """
-        Sets the docker image for all containers of this cluster to the given one. 
+        Replaces the docker image for all containers of this cluster with the given one. 
         The cluster has to be restarted in order to create new containers from the
         new image.
         """

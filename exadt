@@ -2,9 +2,11 @@
 
 import sys, os, argparse, pprint
 sys.path.insert(0, '.')
-
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, utils
 from shutil import rmtree
+#import sys
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.rc2/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.rc2/share/exaoperation')
 
 #{{{
 def confirm(msg):
@@ -48,20 +50,22 @@ def cluster_started(root):
 # {{{ Create cluster
 def create_cluster(cmd):
     conf = exadt_conf.exadt_conf()
+    # always us absolute path
+    root = os.path.abspath(cmd.root)
     # create root-directory if requested
     if cmd.create_root:
         try: 
-            os.makedirs(cmd.root)
+            os.makedirs(root)
         except OSError:
-            if not os.path.isdir(cmd.root):
-                print "Failed to create root-directory '%s'!" % cmd.root
+            if not os.path.isdir(root):
+                print "Failed to create root-directory '%s'!" % root
                 raise
-    elif not os.path.isdir(cmd.root):
-        print "Root directory '%s' does not exist (or is a file)!" % cmd.root
+    elif not os.path.isdir(root):
+        print "Root directory '%s' does not exist (or is a file)!" % root
         sys.exit(1)
     # create entry in config
     try:
-        conf.create_cluster(cmd.cluster, cmd.root)
+        conf.create_cluster(cmd.cluster, root)
     except exadt_conf.ConfError as e:
         print e
         sys.exit(1)
@@ -143,6 +147,9 @@ def init_cluster(cmd):
     if cmd.device_type and cmd.device_type not in ['block','file']:
         print "Device-type must be 'block' or 'file'!" 
         sys.exit(1)
+    if cmd.auto_storage and cmd.device_type != 'file':
+        print "'--auto-storage' is only supported for device-type 'file'!"
+        sys.exit(1)
     # check and re-init root if requested
     files = os.listdir(root)
     if files:
@@ -177,8 +184,20 @@ def init_cluster(cmd):
         os.makedirs(os.path.join(node_root, exaconf.storage_dir))
         os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
     # initialize EXAConf
-    exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.license, cmd.device_type, cmd.force, "Docker")
-    
+    if cmd.exasolution_version:
+        exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.license, cmd.device_type, cmd.force, "Docker",
+                           exasolution_version = cmd.exasolution_version )
+    else:
+        exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.license, cmd.device_type, cmd.force, "Docker")
+    # create devices and volumes if requested
+    if cmd.auto_storage:
+        try:
+            devh = device_handler.device_handler(exaconf)
+            devh.auto_create_file_devices()
+        except device_handler.DeviceError as e:
+            print e
+            sys.exit(1)
+
     print "Successfully initialized root directory '%s'." % root
 #}}}
 
@@ -262,7 +281,9 @@ def update_cluster(cmd):
         sys.exit(1)
     try:
         exaconf = EXAConf.EXAConf(root, True)
-        exaconf.set_docker_image(cmd.image)
+        exaconf.update_docker_image(cmd.image)
+        if cmd.exasolution_version and cmd.exasolution_version.strip() != "":
+            exaconf.update_exasolution_version(cmd.exasolution_version.strip())
     except EXAConf.EXAConfError as e:
         print e
         sys.exit(1)
@@ -411,6 +432,14 @@ def main():
             required = True,
             help = 'the type of EXAStorage device (block | file)')
     parser_ic.add_argument(
+            '--auto-storage', '-a',
+            action = 'store_true',
+            help = "automatically create file-devices, disks and volumes (requires sufficient free space in the root directory and only works for device-type 'file')")
+    parser_ic.add_argument(
+            '--exasolution-version', '-v',
+            type = str,
+            help='EXASolution version number (necessary if image contains multiple EXASolution installations)')
+    parser_ic.add_argument(
             '--force', '-f',
             action = 'store_true',
             help='force re-initialization of the root directory (if not empty)')
@@ -433,6 +462,10 @@ def main():
             '--image', '-i',
             required=True,
             help='the new docker image')
+    parser_upc.add_argument(
+            '--exasolution-version', '-v',
+            type = str,
+            help='EXASolution version number')
     parser_upc.set_defaults(func=update_cluster)
  
     # start cluster command
@@ -447,7 +480,7 @@ def main():
             default = "",
             help='custom start command for all containers (useful for debugging)')
     parser_sc.add_argument(
-            '--verbose', '-v',
+            '--verbose', '-V',
             action = 'store_true',
             help='increase output')
     parser_sc.set_defaults(func=start_cluster)
@@ -464,7 +497,7 @@ def main():
             default=30,
             help='seconds to wait for a container to stop before sending SIGKILL (default: 30s)')
     parser_stc.add_argument(
-            '--verbose', '-v',
+            '--verbose', '-V',
             action = 'store_true',
             help='increase output')
     parser_stc.set_defaults(func=stop_cluster)
@@ -477,7 +510,7 @@ def main():
             'cluster', type=str, metavar="CLUSTER",
             help='name of the cluster')
     parser_psc.add_argument(
-            '--verbose', '-v',
+            '--verbose', '-V',
             action = 'store_true',
             help='dump all container info from docker')
     parser_psc.set_defaults(func=ps)

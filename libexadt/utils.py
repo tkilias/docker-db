@@ -1,6 +1,6 @@
 #! /usr/bin/env python2.7
 
-import re
+import re, base64, string, random
 
 #{{{ Units to bytes
 
@@ -28,4 +28,21 @@ def bytes2units(num):
         if num < 1024.0:
             return "%3.1f %s" % (num, x)
         num /= 1024.0
+#}}}
+ 
+#{{{ Gen passwd
+def gen_passwd(length):
+    """
+    Generates a new password with given length.
+    """
+    key = ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(length))
+    return key
+#}}}
+ 
+#{{{ Gen base64 passwd
+def gen_base64_passwd(length):
+    """
+    Generates a base64 encoded password with given length.
+    """
+    return base64.b64encode(gen_passwd(length))
 #}}}
