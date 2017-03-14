@@ -4,25 +4,32 @@ EXASOL is the intelligent, high-performance in-memory analytic database that jus
 
 # How to use this image
 
-- Pull the image to your local docker installation
+- Pull the image to your docker host:
 
 ```console
-$ TODO 
+$ docker pull exasol/docker-db
 ```
 
-- Install the `exadt` command-line tool (and all dependencies)
+- Install the `exadt` dependencies:
 
 ```console
-$ TODO
+$ pip install docker ipaddr ConfigObj
 ```
 
-- Create and configure your virtual EXASOL cluster.
+- Install `exadt`:
+
+```console
+$ git clone git@github.com:EXASOL/docker-db.git
+$ cd docker-db
+```
+
+- Create and configure your virtual EXASOL cluster by using the commands described in the `exadt` documentation below.
 
 # exadt
 
 The `exadt` command-line tool is used to create, initialize, start, stop and delete a Docker based EXASOL cluster.
 
-## Creating a cluster
+## 1. Creating a cluster
 
 You first have to select a root directory for your EXASOl cluster. It will be used to store the data, metadata and buckets of all local containers and should therefore be located on a filesystem with sufficient free space.
 
@@ -41,7 +48,7 @@ $ exadt list-clusters
  MyCluster                   /home/user/MyCluster                       exabase:6.0.beta3
 ```
 
-## Initializing a cluster
+## 2. Initializing a cluster
 
 After creating a cluster it has to be initialized. Mandatory parameters are:
 
@@ -64,9 +71,9 @@ It also creates the EXAConf file in the root directory, which describes the whol
 
 The `--auto-storage` option can be used to tell `exadt` to automatically create file-devices for all virtual nodes (within the root directory). These devices are then assigned to the volumes that are also automatically created.
 
-This option needs at least 10GiB of free space and uses up to 100GiB of it for all devices combined. If `--auto-storage` is used, you can skip the next step entirely.
+This option needs at least 10GiB of free space and uses up to 100GiB of it for all devices combined. If `--auto-storage` is used, you can skip the next step entirely (and continue with section 4).
 
-## Adding EXAStorage devices
+## 3. Adding EXAStorage devices
 
 Next, we need to add devices to be used by EXAstorage. This can be done by executing:
 
@@ -105,7 +112,7 @@ Then do the same for "EXAVolume : ArchiveVolume1".
 
 Make sure not to make the volume too big! The specified size is the size that is available for the database, i. e. if the redundancy is 2, the actually used space is doubled! Also make sure to leave some free space for the temporary volume, that is created by the database during startup.
 
-## Starting a cluster
+## 4. Starting a cluster
 
 The cluster is started using the `exadt start-cluster` command. Before the containers are actually created, `exadt` checks if there is enough free space for the sparse files (if they grow to their max. size). If not, the startup will fail:
 
@@ -147,7 +154,7 @@ This command creates and starts all containers and networks. Each cluster uses o
 
 The containers are created every time the cluster is started and they are destroyed when it is deleted! All persistent data is stored within the root directory (and the mapped devices, if specified).
 
-## Inspecting a cluster
+## 5. Inspecting a cluster
 
 You can list all containers of an existing cluster by executing:
 
@@ -158,7 +165,7 @@ $ exadt ps MyCluster
  10           Up 5 seconds                    exabase:6.0.beta3           n10               e9347c3e41ca   MyCluster_10           8898->8888,6593->6583
 ```
 
-## Stopping a cluster
+## 6. Stopping a cluster
 
 A cluster can be stopped by executing:
 
@@ -173,7 +180,7 @@ Removing network 'MyCluster_priv'... successful
 
 As stated above, the containers are deleted when a cluster is stopped, but the root directory is preserved (as well as all mapped devices). Also the automatically created networks are removed. 
 
-## Deleting a cluster
+## 7. Deleting a cluster
 
 A cluster can be completely deleted by executing:
 
