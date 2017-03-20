@@ -22,7 +22,7 @@ class device_handler:
     def __init__(self, ec):
         self.exaconf = ec
         self.min_auto_free_space = (1024 * 1024 * 1024 * 10)
-        self.max_auto_used_space = self.min_auto_free_space * 10
+        self.max_auto_used_space = self.min_auto_free_space * 4
         self.auto_reserved_size    = (1024 * 1024 * 50)
         self.default_disk_name   = "default"
 #}}}

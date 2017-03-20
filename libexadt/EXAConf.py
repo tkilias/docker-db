@@ -46,12 +46,18 @@ class EXAConf:
         will be validated.
         """
 
-        # some static params
-        self.cos_version = "6.0.rc2"
-        self.cos_major_version = "6"
-        # exasolution versions may be overwritten by CLI parameter
-        self.set_exasolution_version(self.cos_version)
-        self.cos_dir = "/usr/opt/EXASuite-6/EXAClusterOS-6.0.rc2"
+        # Version numbers of the current cluster
+        # NOTE : the version numbers are somewhat special. The COS
+        # and DB version are overwritten by the ones in the EXAConf file
+        # (present after initialization). The DB version may also be
+        # overwritten during initialization (if provided on the CLI
+        # or taken from the Docker image).
+        # The 'version' parameter is static and denotes the version
+        # of the EXAConf python module
+        self.version = "6.0.0"
+        self.set_os_version(self.version)
+        self.set_db_version(self.version)
+        # static values
         self.container_root = "/exa"
         self.node_root_prefix = "n"
         self.dev_prefix = "dev."
@@ -94,31 +100,104 @@ class EXAConf:
                                               indent_type = '    ')
         except configobj.ConfigObjError as e:
             raise EXAConfError("Failed to read '%s': %s" % (self.conf_path, e))
+        
         # validate content if EXAConf is already initialized
+        # also read current version numbers from config
         if initialized:
             self.validate()
+            self.set_os_version(self.config["Global"]["OSVersion"])
+            self.set_db_version(self.config["Global"]["DBVersion"])
 #}}}
 
-#{{{ Set EXASolution version
-    def set_exasolution_version(self, exasolution_version):
+#{{{ Set OS version
+    def set_os_version(self, os_version):
         """
-        Stores the given exasolution version and builds the path to the EXASolution installation 
-        based on the EXASolution version.
+        Stores the given OS (EXAClusterOS) version and builds the path to the OS installation 
+        based on the OS version.
         """
-        self.exasolution_version = exasolution_version.strip()
-        self.exasolution_major_version = self.exasolution_version.split(".")[0]
-        self.exasolution_dir = "/usr/opt/EXASuite-" + self.exasolution_major_version + \
-                               "/EXASolution-" + self.exasolution_version
+        self.os_version = self.version
+        self.cos_major_version = self.os_version.split(".")[0].strip()
+        self.cos_dir = "/usr/opt/EXASuite-" + self.cos_major_version + \
+                       "/EXAClusterOS-" + self.os_version
 #}}}
 
-#{{{ Update EXASolution version
-    def update_exasolution_version(self, exasolution_version):
+#{{{ Set db version
+    def set_db_version(self, db_version):
         """
-        Replaces all occurences of the EXASolution version number with the given one
+        Stores the given database (EXASolution) version and builds the path to the database installation 
+        based on the db version.
+        """
+        self.db_version = db_version.strip()
+        self.db_major_version = self.db_version.split(".")[0].strip()
+        self.db_dir = "/usr/opt/EXASuite-" + self.db_major_version + \
+                      "/EXASolution-" + self.db_version
+#}}}
+
+#{{{ Update db version
+    def update_db_version(self, db_version):
+        """
+        Replaces all occurences of the database version number with the given one
         and commits the configuration (used to update the cluster).
         """
-#}}}
 
+        # get all databases with the current (old) version and replace with given one
+        filters = {"Version" : self.db_version}
+        db_configs = self.get_databases(filters=filters)
+        for db in db_configs.iteritems():
+            db_sec = self.config["DB : " + db[0]]
+            db_sec["Version"] = db_version
+
+        # change paths in all Buckets
+        curr_suite_name = "EXASuite-" + self.db_major_version
+        curr_db_name = "EXASolution-" + self.db_version
+        new_suite_name = "EXASuite-" + db_version.split(".")[0].strip()
+        new_db_name = "EXASolution-" + db_version
+        bucketfs_conf = self.get_bucketfs_conf()
+        for bfs in bucketfs_conf.fs.iteritems():
+            for bucket in bfs[1].buckets.iteritems():
+                bucket_sec = self.config['BucketFS : ' + bfs[0]]['Bucket : ' + bucket[0]]
+                if "AdditionalFiles" in bucket_sec.scalars:
+                    # replace the combo first (e. g. "EXASuite-5/EXASolution-5.0.1" with "EXASuite-6/EXASolution-6.0.0"
+                    # in order to keep the old suite in the EXAClusterOS paths
+                    bucket_sec["AdditionalFiles"] = bucket_sec["AdditionalFiles"].replace(curr_suite_name + "/" + curr_db_name,
+                                                                                          new_suite_name + "/" + new_db_name)
+                    bucket_sec["AdditionalFiles"] = bucket_sec["AdditionalFiles"].replace(curr_db_name, new_db_name)
+
+        # replace global version
+        self.config["Global"]["DBVersion"] = db_version
+        self.set_db_version(db_version)
+        self.commit()
+#}}}
+ 
+#{{{ Update os version
+    def update_os_version(self, os_version):
+        """
+        Replaces all occurences of the OS version number with the given one
+        and commits the configuration (used to update the cluster).
+        """
+
+        # change paths in all Buckets
+        curr_suite_name = "EXASuite-" + self.db_major_version
+        curr_os_name = "EXAClusterOS-" + self.os_version
+        new_suite_name = "EXASuite-" + os_version.split(".")[0].strip()
+        new_os_name = "EXAClusterOS-" + os_version
+        bucketfs_conf = self.get_bucketfs_conf()
+        for bfs in bucketfs_conf.fs.iteritems():
+            for bucket in bfs[1].buckets.iteritems():
+                bucket_sec = self.config['BucketFS : ' + bfs[0]]['Bucket : ' + bucket[0]]
+                if "AdditionalFiles" in bucket_sec.scalars:
+                    # replace the combo first (e. g. "EXASuite-5/EXAClusterOS-5.0.1" with "EXASuite-6/EXAClusterOS-6.0.0"
+                    # in order to keep the old suite in the EXASolution paths
+                    bucket_sec["AdditionalFiles"] = bucket_sec["AdditionalFiles"].replace(curr_suite_name + "/" + curr_os_name,
+                                                                                          new_suite_name + "/" + new_os_name)
+                    bucket_sec["AdditionalFiles"] = bucket_sec["AdditionalFiles"].replace(curr_os_name, new_os_name)
+
+        # replace global version
+        self.config["Global"]["OSVersion"] = os_version
+        self.set_os_version(os_version)
+        self.commit()
+#}}}
+ 
 #{{{ Clear configuration
     def clear_config(self):
         """
@@ -149,7 +228,7 @@ class EXAConf:
 #}}}
  
 #{{{ Is initialized
-    def is_initialized(self):
+    def initialized(self):
         """
         Checks if the current instance has already been initialized.
         """
@@ -157,14 +236,14 @@ class EXAConf:
 #}}}
 
 #{{{ (Re-)initialize a configuration
-    def initialize(self, name, image, num_nodes, license, device_type, force, platform, exasolution_version=None):
+    def initialize(self, name, image, num_nodes, device_type, force, platform, db_version=None, license=None):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
         """
 
         # check if EXAConf is already initialized
-        if self.is_initialized():
+        if self.initialized():
             if not force:
                 print "EXAConf file '%s' is already initialized!" % self.conf_path
                 return
@@ -173,17 +252,19 @@ class EXAConf:
         # sanity checks
         if not self.platform_supported(platform):
             raise EXAConfError("Platform '%s' is not supported!") % platform
-        # set exasolution version if given (and modify path)
-        if exasolution_version and exasolution_version != "":
-            self.set_exasolution_version(exasolution_version.strip())
+        # set db version if given (and modify path)
+        if db_version and db_version != "":
+            self.set_db_version(db_version.strip())
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
         glob_sec["ClusterName"] = name
         glob_sec["Platform"] = platform
-        glob_sec["LicenseFile"] = license
+        glob_sec["LicenseFile"] = license if license else ""
         glob_sec["CoredPort"] = "10001"
         glob_sec["Networks"] = "private"
+        glob_sec["OSVersion"] = self.os_version
+        glob_sec["DBVersion"] = self.db_version
         # comments
         glob_sec.comments["Networks"] = ["The type of networks for this cluster: 'public', 'private' or both."]
 
@@ -264,7 +345,7 @@ class EXAConf:
         db_sec = self.config["DB : DB1"] 
         db_sec["DataVolume"] = "DataVolume1"
         db_sec["ArchiveVolume"] = "ArchiveVolume1"
-        db_sec["Version"] = str(self.exasolution_version)
+        db_sec["Version"] = str(self.db_version)
         db_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
         db_sec["MemSize"] = '2 GiB'
         db_sec["Port"] = str(self.def_db_port)
@@ -305,7 +386,7 @@ class EXAConf:
         bucket_sec["Public"] = "True"
         bucket_sec["Name"] = "default"
         bucket_sec["AdditionalFiles"] = "EXAClusterOS:" + os.path.join(self.cos_dir, "var/clients/packages/ScriptLanguages-*") + ", " + \
-                                        "EXASolution-" + self.exasolution_version + ":" + os.path.join(self.exasolution_dir, "bin/udf/*")
+                                        "EXASolution-" + self.db_version + ":" + os.path.join(self.db_dir, "bin/udf/*")
         # comments
         bfs_sec.comments["Bucket : default"] = ["\n", "A bucket"]
 
@@ -318,7 +399,7 @@ class EXAConf:
         """ Validates the EXAConf configuration file. """
     
         # validation only makes sense after initalization
-        if not self.is_initialized():
+        if not self.initialized():
             raise EXAConfError("Configuration is not initialized! Use 'init-cluster' in order to initialize it.")
         # public network is optional
         have_priv_net = self.has_priv_net()
@@ -618,6 +699,28 @@ class EXAConf:
         return self.config["Global"]["ClusterName"]
 #}}}
   
+#{{{ Get db version
+    def get_db_version(self):
+        """
+        Returns the current DB version.
+        """
+        if self.initialized():
+            return self.config["Global"]["DBVersion"]
+        else:
+            return self.db_version
+#}}}
+   
+#{{{ Get os version
+    def get_os_version(self):
+        """
+        Returns the current OS version.
+        """
+        if self.initialized():
+            return self.config["Global"]["OSVersion"]
+        else:
+            return self.os_version
+#}}}
+ 
 #{{{ Get cored port
     def get_cored_port(self):
         """
@@ -808,18 +911,11 @@ class EXAConf:
                 else:
                     conf.stripe_size = conf.block_size * 64
                 volume_configs[vol_name] = conf
-        # filter results if requested
-        if filters:
-            for vol in volume_configs.items(): # use a copy!
-                for f in filters.iteritems():
-                    if f[0] in vol[1].iterkeys() and f[1] != vol[1][f[0]]:
-                        del volume_configs[vol[0]]
-                        break
-        return volume_configs
+        return self.filter_configs(volume_configs, filters)
 #}}}
  
 #{{{ Get databases
-    def get_databases(self):
+    def get_databases(self, filters=None):
         """
         Returns a config describing all existing EXASolution databases.
         """
@@ -842,7 +938,7 @@ class EXAConf:
                 if "Params" in db_sec.scalars:
                     conf.params = db_sec["Params"]
                 db_configs[db_name] = conf
-        return db_configs
+        return self.filter_configs(db_configs, filters)
 #}}}
       
 #{{{ Get bucketfs conf
@@ -884,6 +980,23 @@ class EXAConf:
         return bfs_config
 #}}}
 
+#{{{ Filter configs
+    def filter_configs(self, configs, filters):
+        """
+        Applies the given filters (a dict) to the given config object by removing all items that
+        don't match the filter criteria. It assumes that 'configs' contains is in fact a dict
+        with config objects as values (e. g. some volumes or database configurations).
+        """
+        if not filters:
+            return configs
+        for item in configs.items(): # use a copy!
+            for f in filters.iteritems():
+                if f[0] in item[1].iterkeys() and f[1] != item[1][f[0]]:
+                    del configs[item[0]]
+                    break
+        return configs
+#}}}
+
 ##############################  DOCKER EXCLUSIVE STUFF ##################################
 
 #{{{ Get docker image
@@ -901,10 +1014,8 @@ class EXAConf:
         The cluster has to be restarted in order to create new containers from the
         new image.
         """
-        old_image = self.get_docker_image()
         self.config["Docker"]["Image"] = image
         self.commit()
-        print "Successfully changed docker image from '%s' to '%s' in '%s'." % (old_image, image, self.conf_path)
 #}}}
 
 #{{{ Get docker device type

@@ -1,12 +1,11 @@
 #! /usr/bin/env python2.7
 
 import sys, os, argparse, pprint
-sys.path.insert(0, '.')
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, utils
 from shutil import rmtree
 #import sys
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.rc2/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.rc2/share/exaoperation')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/share/exaoperation')
 
 #{{{
 def confirm(msg):
@@ -33,7 +32,7 @@ def cluster_started(root):
         sys.exit(1)
     # EXAConf may be un-inititalized if delete-cluster is
     # called directly after create-cluster
-    if not exaconf.is_initialized():
+    if not exaconf.initialized():
         return False
     try:
         # validate manually if initialized (see above)
@@ -95,7 +94,7 @@ def delete_cluster(cmd):
     initialized = False
     try:
         exaconf = EXAConf.EXAConf(root, False)
-        initialized = exaconf.is_initialized()
+        initialized = exaconf.initialized()
     except EXAConf.EXAConfError as e:
         print e
         # interpret exception as "not initialized" and proceed
@@ -184,11 +183,9 @@ def init_cluster(cmd):
         os.makedirs(os.path.join(node_root, exaconf.storage_dir))
         os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
     # initialize EXAConf
-    if cmd.exasolution_version:
-        exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.license, cmd.device_type, cmd.force, "Docker",
-                           exasolution_version = cmd.exasolution_version )
-    else:
-        exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.license, cmd.device_type, cmd.force, "Docker")
+    exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.device_type, cmd.force, "Docker",
+                       db_version = cmd.db_version if cmd.db_version else None,
+                       license = cmd.license if cmd.license else None)
     # create devices and volumes if requested
     if cmd.auto_storage:
         try:
@@ -281,13 +278,23 @@ def update_cluster(cmd):
         sys.exit(1)
     try:
         exaconf = EXAConf.EXAConf(root, True)
+        old_docker_image = exaconf.get_docker_image()
+        old_db_version = exaconf.get_db_version()
+        old_os_version = exaconf.get_os_version()
         exaconf.update_docker_image(cmd.image)
-        if cmd.exasolution_version and cmd.exasolution_version.strip() != "":
-            exaconf.update_exasolution_version(cmd.exasolution_version.strip())
+        if cmd.db_version and cmd.db_version.strip() != "":
+            exaconf.update_db_version(cmd.db_version.strip())
+        if cmd.os_version and cmd.os_version.strip() != "":
+            exaconf.update_os_version(cmd.os_version.strip())
     except EXAConf.EXAConfError as e:
         print e
         sys.exit(1)
-    print "Cluster '%s' has successfully been updated! Restart the cluster to apply the changes." % cmd.cluster
+    col_width = len(old_docker_image)
+    print "Cluster '%s' has been successfully updated!" % cmd.cluster
+    print "- Image :  %-*s --> %s" % (col_width, old_docker_image, exaconf.get_docker_image())
+    print "- DB    :  %-*s --> %s" % (col_width, old_db_version, exaconf.get_db_version())
+    print "- OS    :  %-*s --> %s" % (col_width, old_os_version, exaconf.get_os_version())
+    print "Restart the cluster in order to apply the changes." 
 #}}}
 
 #{{{ ps
@@ -310,15 +317,46 @@ def ps(cmd):
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)
+    # not running?
+    if len(containers) == 0:
+        print "No containers found for cluster '%s'." % cmd.cluster
+        sys.exit(0)
+    # verbose output    
     if cmd.verbose:
         pprint.pprint(containers)
-    print " %- 10s   %- 29s   %- 25s   %- 15s   %- 12s   %- 20s   %- 20s" % ("NODE ID", "STATUS", "IMAGE", "HOSTNAME", "CONTAINER ID", "CONTAINER NAME", "EXPOSED PORTS")
+    # create list containing the column widths (use max. len of each column entry)
+    width = [0] * 7
+    width[0] = max(max(len(c['Labels']['NodeID']) for c in containers), len("NODE_ID"))
+    width[1] = max(max(len(c['Status']) for c in containers), len("STATUS"))
+    width[2] = max(max(len(c['Image']) for c in containers), len("IMAGE"))
+    width[3] = max(max(len(c['Labels']['Hostname']) for c in containers), len("HOSTNAME"))
+    width[4] = 12
+    width[5] = max(max(len(c['Names'][0].lstrip("/")) for c in containers), len("CONTAINER NAME"))
+    width[6] = 0
     for c in containers:
         ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if d.has_key('PublicPort') ]
         ports_str = ",".join([str(p[0]) + "->" + str(p[1]) for p in ports])
-        print " %- 10s   %- 29s   %- 25s   %- 15s   %- 12s   %- 20s   %- 20s" % (c['Labels']['NodeID'], c['Status'][:29], c['Image'][:25],
-                                                                        c['Labels']['Hostname'][:15], c['Id'][:12], 
-                                                                        c['Names'][0].lstrip("/")[:20], ports_str) 
+        if len(ports_str) > width[6]:
+            width[6] = len(ports_str)
+    width[6] = max(width[6], len("EXPOSED PORTS"))
+
+    print " %- *s   %- *s   %- *s   %- *s   %- *s   %- *s   %- *s" % (width[0], "NODE ID", 
+                                                                      width[1], "STATUS", 
+                                                                      width[2], "IMAGE", 
+                                                                      width[3], "HOSTNAME", 
+                                                                      width[4], "CONTAINER ID", 
+                                                                      width[5], "CONTAINER NAME", 
+                                                                      width[6], "EXPOSED PORTS")
+    for c in containers:
+        ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if d.has_key('PublicPort') ]
+        ports_str = ",".join([str(p[0]) + "->" + str(p[1]) for p in ports])
+        print " %- *s   %- *s   %- *s   %- *s   %- .*s   %- *s   %- *s" % (width[0], c['Labels']['NodeID'], 
+                                                                           width[1], c['Status'], 
+                                                                           width[2], c['Image'],
+                                                                           width[3], c['Labels']['Hostname'],
+                                                                           width[4], c['Id'], 
+                                                                           width[5], c['Names'][0].lstrip("/"),
+                                                                           width[6], ports_str) 
 #}}}
 
 #{{{ Create file devices
@@ -425,7 +463,6 @@ def main():
             help = 'nr. of nodes (i. e. containers)')
     parser_ic.add_argument(
             '--license', '-l',
-            required = True,
             help = 'path to the license file')
     parser_ic.add_argument(
             '--device-type', '-d',
@@ -436,9 +473,9 @@ def main():
             action = 'store_true',
             help = "automatically create file-devices, disks and volumes (requires sufficient free space in the root directory and only works for device-type 'file')")
     parser_ic.add_argument(
-            '--exasolution-version', '-v',
+            '--db-version', '-D',
             type = str,
-            help='EXASolution version number (necessary if image contains multiple EXASolution installations)')
+            help='Database version number (necessary if image contains multiple database installations)')
     parser_ic.add_argument(
             '--force', '-f',
             action = 'store_true',
@@ -463,9 +500,13 @@ def main():
             required=True,
             help='the new docker image')
     parser_upc.add_argument(
-            '--exasolution-version', '-v',
+            '--db-version', '-D',
             type = str,
-            help='EXASolution version number')
+            help='DB version number')
+    parser_upc.add_argument(
+            '--os-version', '-O',
+            type = str,
+            help='OS version number')
     parser_upc.set_defaults(func=update_cluster)
  
     # start cluster command

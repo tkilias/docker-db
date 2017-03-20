@@ -2,6 +2,26 @@
 
 EXASOL is the intelligent, high-performance in-memory analytic database that just works.
 
+# What is this image
+
+This image is a dockerized version of the EXASOL DB 6.0.0 suitable for testing.
+
+Currently supported features:
+- start/stop database
+- UDF framework
+- port forwarding
+- software update
+- backups on archive volumes
+
+Features currently not supported, but will be supported shortly:
+- block devices for data storage
+- backups on remote volumes
+- license handling
+
+Features still in development:
+- multinode setup
+- XML/RPC interface
+
 # How to use this image
 
 - Pull the image to your Docker host:
@@ -44,8 +64,8 @@ In order to list all existing clusters you can use `exadt list-clusters`:
 
 ```console
 $ exadt list-clusters
- CLUSTER                     ROOT                                       IMAGE                    
- MyCluster                   /home/user/MyCluster                       <uninitialized>
+CLUSTER                     ROOT                                       IMAGE
+MyCluster                   /home/user/MyCluster                       <uninitialized>
 ```
 
 ## 2. Initializing a cluster
