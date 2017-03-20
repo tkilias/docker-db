@@ -2,9 +2,9 @@
 
 EXASOL is the intelligent, high-performance in-memory analytic database that just works.
 
-# What is this image
+# What is in this repository?
 
-This image is a dockerized version of the EXASOL DB 6.0.0 suitable for testing.
+This repository represents a dockerized version of the EXASOL DB 6.0.0 suitable for testing.
 
 Currently supported features:
 - start/stop database
