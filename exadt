@@ -1,11 +1,10 @@
 #! /usr/bin/env python2.7
 
 import sys, os, argparse, pprint
+sys.path.insert(0, '.')
+
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, utils
 from shutil import rmtree
-#import sys
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/share/exaoperation')
 
 #{{{
 def confirm(msg):
