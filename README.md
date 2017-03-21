@@ -78,7 +78,7 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the license file
 
 ```console
-$ exadt init-cluster --image exabase:6.0.beta3 --num-nodes 2 --device-type file --license /home/user/my_license MyCluster
+$ exadt init-cluster --image exabase:6.0.0-d1 --num-nodes 1 --auto-storage --device-type file MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```
@@ -95,7 +95,7 @@ If `--auto-storage` is used, you can skip the next step entirely (and *continue 
 
 ## 3. Adding EXAStorage devices
 
-Next, we need to add devices to be used by EXAstorage. This can be done by executing:
+Next, we need to add devices to be used by EXAstorage, in case we used the `--auto-storage` flag we can skip this section. This can be done by executing:
 
 ```console
 $ exadt create-file-devices --num 2 --size 20GiB MyCluster
