@@ -45,7 +45,7 @@ $ cd docker-db
 
 - Create and configure your virtual EXASOL cluster by using the commands described in the `exadt` documentation below.
 
-# EXASOL Docker Tool -- `exadt`
+# EXASOL Docker Tool — `exadt`
 
 The `exadt` command-line tool is used to create, initialize, start, stop, update and delete a Docker based EXASOL cluster.
 
