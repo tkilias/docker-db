@@ -27,7 +27,7 @@ Features still in development:
 - Pull the image to your Docker host:
 
 ```console
-$ docker pull exasol/docker-db
+$ docker pull exasol/docker-db:6.0.0-d1
 ```
 
 - Install the `exadt` dependencies:
