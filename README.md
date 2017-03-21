@@ -78,7 +78,7 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the license file
 
 ```console
-$ exadt init-cluster --image exabase:6.0.0-d1 --num-nodes 1 --auto-storage --device-type file MyCluster
+$ exadt init-cluster --image exasol/docker-db:6.0.0-d1 --num-nodes 1 --auto-storage --device-type file MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```
