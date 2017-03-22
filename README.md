@@ -4,16 +4,16 @@ EXASOL is the intelligent, high-performance in-memory analytic database that jus
 
 # What is in this repository?
 
-This repository represents a dockerized version of the EXASOL DB 6.0.0 suitable for testing.
+This repository contains a dockerized version of the EXASOL DB version 6.0 suitable for testing.
 
 Currently supported features:
-- start/stop database
-- UDF framework
-- port forwarding
-- software update
-- backups on archive volumes
+- create / start / stop a database in a virtual cluster
+- use the UDF framework
+- expose ports from containers on the local host
+- update the virtual cluster
+- create backups on archive volumes
 
-Features currently not supported, but will be supported shortly:
+Features to be supported soon:
 - block devices for data storage
 - backups on remote volumes
 - license handling
@@ -64,8 +64,8 @@ In order to list all existing clusters you can use `exadt list-clusters`:
 
 ```console
 $ exadt list-clusters
-CLUSTER                     ROOT                                       IMAGE
-MyCluster                   /home/user/MyCluster                       <uninitialized>
+ CLUSTER                     ROOT                                       IMAGE                    
+ MyCluster                   /home/user/MyCluster                       <uninitialized>
 ```
 
 ## 2. Initializing a cluster
@@ -75,10 +75,9 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the EXASOL Docker image 
 - the nr. of virtual nodes (i. e. containers) on the local host
 - the type of EXAStorage devices (currently only 'file' is supported)
-- the license file
 
 ```console
-$ exadt init-cluster --image exasol/docker-db:6.0.0-d1 --num-nodes 1 --auto-storage --device-type file MyCluster
+$ exadt init-cluster --image exasol/docker-db:6.0.0-d1 --num-nodes 2 --device-type file MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```
@@ -95,7 +94,9 @@ If `--auto-storage` is used, you can skip the next step entirely (and *continue 
 
 ## 3. Adding EXAStorage devices
 
-Next, we need to add devices to be used by EXAstorage, in case we used the `--auto-storage` flag we can skip this section. This can be done by executing:
+NOTE:  This step can be skipped if `--auto-storage` has been used during initialization.
+
+Next, devices for EXAStorage need to be added. This can be done by executing:
 
 ```console
 $ exadt create-file-devices --num 2 --size 20GiB MyCluster
@@ -180,9 +181,9 @@ All containers of an existing cluster can be listed by executing:
 
 ```console
 $ exadt ps MyCluster
- NODE ID      STATUS                          IMAGE                       HOSTNAME          CONTAINER ID   CONTAINER NAME         EXPOSED PORTS       
- 11           Up 4 seconds                    exabase:6.0.beta3           n11               df1996713bc1   MyCluster_11           8899->8888,6594->6583
- 10           Up 5 seconds                    exabase:6.0.beta3           n10               e9347c3e41ca   MyCluster_10           8898->8888,6593->6583
+ NODE ID      STATUS          IMAGE                       HOSTNAME   CONTAINER ID   CONTAINER NAME    EXPOSED PORTS       
+ 11           Up 4 seconds    exasol/docker-db:6.0.0-d1   n11        df1996713bc1   MyCluster_11      8899->8888,6594->6583
+ 10           Up 5 seconds    exasol/docker-db:6.0.0-d1   n10        e9347c3e41ca   MyCluster_10      8898->8888,6593->6583
 ```
 
 The `EXPOSED PORTS` column shows all container ports that are reachable from outside the local host ('host'->'container'), usually one for the database and one for BucketFS.
@@ -223,7 +224,7 @@ A cluster has to be stopped before it can be deleted (even if all containers are
   
 # Supported Docker versions
 
-`exadt` and the EXASol Docker image have been developed and tested with Docker version 1.12.x. It may also work with earlier versions, but that is not guaranteed.
+`exadt` and the EXASOL Docker image have been developed and tested with Docker version 1.12.x. It may also work with earlier versions, but that is not guaranteed.
 
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
  
