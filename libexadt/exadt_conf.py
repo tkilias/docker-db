@@ -66,6 +66,14 @@ class exadt_conf:
             
 #}}}
 
+#{{{ Get conf paths
+    def get_conf_paths(self):
+        """
+        Returns all possible paths for exadt configuration files.
+        """
+        return self.conf_paths
+#}}}
+
 #{{{ Create cluster
     def create_cluster(self, name, root):
         """ 

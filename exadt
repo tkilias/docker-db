@@ -1,10 +1,11 @@
 #! /usr/bin/env python2.7
 
 import sys, os, argparse, pprint
-sys.path.insert(0, '.')
-
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, utils
 from shutil import rmtree
+#import sys
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/share/exaoperation')
 
 #{{{
 def confirm(msg):
@@ -155,7 +156,7 @@ def init_cluster(cmd):
             for e in files:
                 name = os.path.join(root, e)
                 if os.path.isdir(name):
-                    rmtree(name)
+                    rmtree(name, True)
                 else:
                     os.unlink(name)
         else:
@@ -170,17 +171,28 @@ def init_cluster(cmd):
     # create directory structure
     for node in range(0,cmd.num_nodes):
         node_root = os.path.join(root, exaconf.node_root_prefix + str(10+node))
-        os.makedirs(node_root)
-        os.makedirs(os.path.join(node_root, exaconf.etc_dir))
-        os.makedirs(os.path.join(node_root, exaconf.md_dir))
-        os.makedirs(os.path.join(node_root, exaconf.md_storage_dir))
-        os.makedirs(os.path.join(node_root, exaconf.md_dwad_dir))
-        os.makedirs(os.path.join(node_root, exaconf.log_dir))
-        os.makedirs(os.path.join(node_root, exaconf.logd_dir))
-        os.makedirs(os.path.join(node_root, exaconf.data_dir))
-        os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir))
-        os.makedirs(os.path.join(node_root, exaconf.storage_dir))
-        os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
+        if not os.path.exists(node_root):
+            os.makedirs(node_root)
+        if not os.path.exists(os.path.join(node_root, exaconf.etc_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.etc_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.md_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.md_storage_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.md_storage_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.md_dwad_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.md_dwad_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.log_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.log_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.logd_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.logd_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.data_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.data_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.storage_dir)):
+            os.makedirs(os.path.join(node_root, exaconf.storage_dir))
+        if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs)):
+            os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
     # initialize EXAConf
     exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.device_type, cmd.force, "Docker",
                        db_version = cmd.db_version if cmd.db_version else None,
@@ -201,14 +213,24 @@ def init_cluster(cmd):
 def list_clusters(cmd):
     conf = exadt_conf.exadt_conf()
     clusters = conf.get_clusters()
-    print " %- 25s   %- 40s   %- 25s" % ("CLUSTER", "ROOT", "IMAGE")
+    if len(clusters) == 0:
+        print "No clusters found in %s." % conf.get_conf_paths()
+        sys.exit(0)
+    # create list containing the column widths (use max. len of each column entry)
+    width = [0] * 3
+    width[0] = max(max(len(c) for c in clusters.iterkeys()), len("CLUSTER"))
+    width[1] = max(max(len(os.path.normpath(root)) for root in clusters.itervalues()), len("ROOT"))
+    width[2] = len("IMAGE")
+    print " %- *s   %- *s   %- *s" % (width[0], "CLUSTER", width[1], "ROOT", width[2], "IMAGE")
     for cluster,root in clusters.items():
         try:
             exaconf = EXAConf.EXAConf(root, True)
             image = exaconf.get_docker_image()
         except EXAConf.EXAConfError:
             image = "<uninitialized>"
-        print " %- 25s   %- 40s   %- 25s" % (cluster[:25],os.path.normpath(root[:40]),image)
+        print " %- *s   %- *s   %- s" % (width[0], cluster,
+                                         width[1], os.path.normpath(root),
+                                         image)
 #}}}
 
 #{{{ Docker version
@@ -457,9 +479,9 @@ def main():
             help='docker image to use')
     parser_ic.add_argument(
             '--num-nodes', '-m',
-            required = True,
             type = int,
-            help = 'nr. of nodes (i. e. containers)')
+            default = 1,
+            help = 'nr. of nodes (i. e. containers, default: 1)')
     parser_ic.add_argument(
             '--license', '-l',
             help = 'path to the license file')

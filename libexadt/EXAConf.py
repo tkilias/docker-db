@@ -1,4 +1,4 @@
-import os, ipaddr, configobj
+import os, stat, ipaddr, configobj
 from utils import units2bytes, bytes2units, gen_base64_passwd
 from collections import OrderedDict as odict
 
@@ -53,7 +53,7 @@ class EXAConf:
         # overwritten during initialization (if provided on the CLI
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
-        # of the EXAConf python module
+        # of the EXAConf python module and EXAConf format
         self.version = "6.0.0"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
@@ -115,10 +115,10 @@ class EXAConf:
         Stores the given OS (EXAClusterOS) version and builds the path to the OS installation 
         based on the OS version.
         """
-        self.os_version = self.version
-        self.cos_major_version = self.os_version.split(".")[0].strip()
-        self.cos_dir = "/usr/opt/EXASuite-" + self.cos_major_version + \
-                       "/EXAClusterOS-" + self.os_version
+        self.os_version = os_version.strip()
+        self.os_major_version = self.os_version.split(".")[0].strip()
+        self.os_dir = "/usr/opt/EXASuite-" + self.os_major_version + \
+                      "/EXAClusterOS-" + self.os_version
 #}}}
 
 #{{{ Set db version
@@ -140,6 +140,7 @@ class EXAConf:
         and commits the configuration (used to update the cluster).
         """
 
+        db_version = db_version.strip()
         # get all databases with the current (old) version and replace with given one
         filters = {"Version" : self.db_version}
         db_configs = self.get_databases(filters=filters)
@@ -176,6 +177,7 @@ class EXAConf:
         and commits the configuration (used to update the cluster).
         """
 
+        os_version = os_version.strip()
         # change paths in all Buckets
         curr_suite_name = "EXASuite-" + self.db_major_version
         curr_os_name = "EXAClusterOS-" + self.os_version
@@ -217,6 +219,11 @@ class EXAConf:
         # reload in order to force type conversion 
         # --> parameters added as lists during runtime are converted back to strings (as if they have been added manually)
         self.config.reload()
+        # modify permissions
+        try:
+            os.chmod(self.conf_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError as e:
+            raise EXAConfError("Failed to change permissions for '%s': %s" % (self.conf_path, e))
 #}}}
  
 #{{{ Platform supported
@@ -263,6 +270,7 @@ class EXAConf:
         glob_sec["LicenseFile"] = license if license else ""
         glob_sec["CoredPort"] = "10001"
         glob_sec["Networks"] = "private"
+        glob_sec["ConfVersion"] = self.version
         glob_sec["OSVersion"] = self.os_version
         glob_sec["DBVersion"] = self.db_version
         # comments
@@ -385,7 +393,7 @@ class EXAConf:
         bucket_sec["WritePasswd"] = gen_base64_passwd(22)
         bucket_sec["Public"] = "True"
         bucket_sec["Name"] = "default"
-        bucket_sec["AdditionalFiles"] = "EXAClusterOS:" + os.path.join(self.cos_dir, "var/clients/packages/ScriptLanguages-*") + ", " + \
+        bucket_sec["AdditionalFiles"] = "EXAClusterOS:" + os.path.join(self.os_dir, "var/clients/packages/ScriptLanguages-*") + ", " + \
                                         "EXASolution-" + self.db_version + ":" + os.path.join(self.db_dir, "bin/udf/*")
         # comments
         bfs_sec.comments["Bucket : default"] = ["\n", "A bucket"]
@@ -871,6 +879,14 @@ class EXAConf:
                     node_conf.public_interface = node_sec["PublicInterface"]
                 node_configs[nid] = node_conf
         return node_configs
+#}}}
+
+#{{{ Get num nodes
+    def get_num_nodes(self):
+        """
+        Returns the nr. of nodes in the current EXAConf.
+        """
+        return len([sec for sec in self.config.sections if self.is_node(sec)])
 #}}}
 
 #{{{ Get storage volumes
