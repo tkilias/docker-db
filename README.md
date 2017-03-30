@@ -78,7 +78,7 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the type of EXAStorage devices (currently only 'file' is supported)
 
 ```console
-$ ./exadt init-cluster --image exasol/docker-db:6.0.0-d1 --license /home/user/my_license --device-type file --auto-storage --force MyCluster
+$ ./exadt init-cluster --image exasol/docker-db:6.0.0-d1 --license license.xml --device-type file --auto-storage --force MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```

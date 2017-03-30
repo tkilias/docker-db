@@ -4,7 +4,7 @@ echo "=== Starting exadt basic test ==="
 set -x &&
 exadt create-cluster --root ~/MyCluster/ --create-root MyCluster &&
 exadt list-clusters &&
-exadt init-cluster --image exasol/docker-db:6.0.0-d1 --license /etc/passwd --device-type file --auto-storage --force MyCluster &&
+exadt init-cluster --image exasol/docker-db:6.0.0-d1 --license license.xml --device-type file --auto-storage --force MyCluster &&
 exadt start-cluster MyCluster &&
 exadt ps MyCluster &&
 exadt stop-cluster MyCluster &&
