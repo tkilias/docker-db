@@ -7,6 +7,9 @@ from shutil import rmtree
 #sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/lib')
 #sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/share/exaoperation')
 
+# Flush STDOUT continuously
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
+
 #{{{
 def confirm(msg):
     """
@@ -37,7 +40,7 @@ def cluster_started(root):
     try:
         # validate manually if initialized (see above)
         exaconf.validate()
-        dh = docker_handler.docker_handler(False)
+        dh = docker_handler.docker_handler()
         dh.set_exaconf(exaconf)
         res = dh.cluster_started()
     except docker_handler.DockerError as e:
@@ -130,6 +133,50 @@ def delete_cluster(cmd):
     conf.delete_cluster(cmd.cluster)
 #}}}    
 
+#{{{ Extract versions
+def extract_versions(cmd):
+    """
+    Extracts DB and OS version from given command or (included) docker image.
+    """
+    db_version = None
+    os_version = None
+    # use given versions (if any)
+    if cmd.db_version and cmd.db_version.strip() != "":
+       db_version = cmd.db_version.strip()
+    if cmd.os_version and cmd.os_version.strip() != "":
+       os_version = cmd.os_version.strip()
+    # extract versions from docker image if not given
+    if not db_version or not os_version:
+        try:
+            dh = docker_handler.docker_handler()
+            ic = dh.get_image_conf(cmd.image)
+        except docker_handler.DockerError as e:
+            print e
+            sys.exit(1)
+        if not db_version:
+            db_version = ic.labels.dbversion
+        if not os_version:
+            os_version = ic.labels.osversion 
+    return (db_version, os_version)
+#}}}
+
+#{{{ Get real image version
+def get_real_image_version(image):
+    """
+    Converts any image name with version 'latest' to the actual version.
+    """
+    image = image.strip()
+    if image.split(":")[1] == "latest":
+        try:
+            dh = docker_handler.docker_handler()
+            ic = dh.get_image_conf(image)
+        except docker_handler.DockerError as e:
+            print e
+            sys.exit(1)
+        image = image.split(":")[0] + ":" + ic.labels.version
+    return image
+#}}}
+
 # {{{ Init cluster
 def init_cluster(cmd):
     try:
@@ -138,9 +185,12 @@ def init_cluster(cmd):
     except exadt_conf.ConfError as e:
         print e
         sys.exit(1)
-    # check if root actually exists
+    # check if root and license actually exist
     if not os.path.isdir(root):
         print "Root directory '%s' does not exist (or is a file)!" % root
+        sys.exit(1)
+    if not os.path.isfile(cmd.license):
+        print "License '%s' does not exist (or is a directory)!" % cmd.license
         sys.exit(1)
     # check params
     if cmd.device_type and cmd.device_type not in ['block','file']:
@@ -149,6 +199,12 @@ def init_cluster(cmd):
     if cmd.auto_storage and cmd.device_type != 'file':
         print "'--auto-storage' is only supported for device-type 'file'!"
         sys.exit(1)
+    # check if has been started (i. e. containers exist)
+    if cluster_started(root):
+        print "Cluster '%s' has existing containers. It has to be stopped before it can be re-initialized!" % cmd.cluster
+        sys.exit(1)
+    # extract versions
+    db_version, os_version = extract_versions(cmd)
     # check and re-init root if requested
     files = os.listdir(root)
     if files:
@@ -169,8 +225,8 @@ def init_cluster(cmd):
         print e
         sys.exit(1)
     # create directory structure
-    for node in range(0,cmd.num_nodes):
-        node_root = os.path.join(root, exaconf.node_root_prefix + str(10+node))
+    for node in range(1, cmd.num_nodes+1):
+        node_root = os.path.join(root, exaconf.node_root_prefix + str(exaconf.max_reserved_node_id + node))
         if not os.path.exists(node_root):
             os.makedirs(node_root)
         if not os.path.exists(os.path.join(node_root, exaconf.etc_dir)):
@@ -194,9 +250,11 @@ def init_cluster(cmd):
         if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs)):
             os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
     # initialize EXAConf
-    exaconf.initialize(cmd.cluster, cmd.image, cmd.num_nodes, cmd.device_type, cmd.force, "Docker",
-                       db_version = cmd.db_version if cmd.db_version else None,
-                       license = cmd.license if cmd.license else None)
+    exaconf.initialize(cmd.cluster, get_real_image_version(cmd.image), 
+                       cmd.num_nodes, cmd.device_type, cmd.force, "Docker",
+                       db_version = db_version,
+                       os_version = os_version,
+                       license = cmd.license)
     # create devices and volumes if requested
     if cmd.auto_storage:
         try:
@@ -236,7 +294,7 @@ def list_clusters(cmd):
 #{{{ Docker version
 def docker_version(cmd):
     try:
-        dh = docker_handler.docker_handler(True)
+        dh = docker_handler.docker_handler(verbose=True)
         pp = pprint.PrettyPrinter()
         pp.pprint(dh.version())
     except docker_handler.DockerError as e:
@@ -259,9 +317,9 @@ def start_cluster(cmd):
         sys.exit(1)
     # call docker handler
     try:
-        dh = docker_handler.docker_handler(cmd.verbose)
+        dh = docker_handler.docker_handler(verbose=cmd.verbose)
         dh.set_exaconf(exaconf)
-        dh.start_cluster(cmd.command)
+        dh.start_cluster(cmd = cmd.command)
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)
@@ -281,7 +339,7 @@ def stop_cluster(cmd):
         print e
         sys.exit(1)
     try:
-        dh = docker_handler.docker_handler(cmd.verbose)
+        dh = docker_handler.docker_handler(verbose=cmd.verbose)
         dh.set_exaconf(exaconf)
         dh.stop_cluster(cmd.timeout)
     except docker_handler.DockerError as e:
@@ -297,16 +355,17 @@ def update_cluster(cmd):
     except exadt_conf.ConfError as e:
         print e
         sys.exit(1)
+    # extract new versions
+    new_db_version, new_os_version = extract_versions(cmd)
+    # update image and versions        
     try:
         exaconf = EXAConf.EXAConf(root, True)
         old_docker_image = exaconf.get_docker_image()
         old_db_version = exaconf.get_db_version()
         old_os_version = exaconf.get_os_version()
-        exaconf.update_docker_image(cmd.image)
-        if cmd.db_version and cmd.db_version.strip() != "":
-            exaconf.update_db_version(cmd.db_version.strip())
-        if cmd.os_version and cmd.os_version.strip() != "":
-            exaconf.update_os_version(cmd.os_version.strip())
+        exaconf.update_docker_image(get_real_image_version(cmd.image))
+        exaconf.update_db_version(new_db_version)
+        exaconf.update_os_version(new_os_version)
     except EXAConf.EXAConfError as e:
         print e
         sys.exit(1)
@@ -332,7 +391,7 @@ def ps(cmd):
         print e
         sys.exit(1)
     try:
-        dh = docker_handler.docker_handler(False)
+        dh = docker_handler.docker_handler()
         dh.set_exaconf(exaconf)
         containers = dh.get_all_containers()
     except docker_handler.DockerError as e:
@@ -349,7 +408,7 @@ def ps(cmd):
     width = [0] * 7
     width[0] = max(max(len(c['Labels']['NodeID']) for c in containers), len("NODE_ID"))
     width[1] = max(max(len(c['Status']) for c in containers), len("STATUS"))
-    width[2] = max(max(len(c['Image']) for c in containers), len("IMAGE"))
+    width[2] = max(max(len(c['Labels']['version']) for c in containers), len("IMAGE VERSION"))
     width[3] = max(max(len(c['Labels']['Hostname']) for c in containers), len("HOSTNAME"))
     width[4] = 12
     width[5] = max(max(len(c['Names'][0].lstrip("/")) for c in containers), len("CONTAINER NAME"))
@@ -363,7 +422,7 @@ def ps(cmd):
 
     print " %- *s   %- *s   %- *s   %- *s   %- *s   %- *s   %- *s" % (width[0], "NODE ID", 
                                                                       width[1], "STATUS", 
-                                                                      width[2], "IMAGE", 
+                                                                      width[2], "IMAGE VERSION", 
                                                                       width[3], "HOSTNAME", 
                                                                       width[4], "CONTAINER ID", 
                                                                       width[5], "CONTAINER NAME", 
@@ -373,7 +432,7 @@ def ps(cmd):
         ports_str = ",".join([str(p[0]) + "->" + str(p[1]) for p in ports])
         print " %- *s   %- *s   %- *s   %- *s   %- .*s   %- *s   %- *s" % (width[0], c['Labels']['NodeID'], 
                                                                            width[1], c['Status'], 
-                                                                           width[2], c['Image'],
+                                                                           width[2], c['Labels']['version'],
                                                                            width[3], c['Labels']['Hostname'],
                                                                            width[4], c['Id'], 
                                                                            width[5], c['Names'][0].lstrip("/"),
@@ -484,6 +543,7 @@ def main():
             help = 'nr. of nodes (i. e. containers, default: 1)')
     parser_ic.add_argument(
             '--license', '-l',
+            required = True,
             help = 'path to the license file')
     parser_ic.add_argument(
             '--device-type', '-d',
@@ -497,6 +557,10 @@ def main():
             '--db-version', '-D',
             type = str,
             help='Database version number (necessary if image contains multiple database installations)')
+    parser_ic.add_argument(
+            '--os-version', '-O',
+            type = str,
+            help='EXAClusterOS version number')
     parser_ic.add_argument(
             '--force', '-f',
             action = 'store_true',
@@ -539,7 +603,6 @@ def main():
             help='name of the cluster to be started')
     parser_sc.add_argument(
             '--command', '-c',
-            default = "",
             help='custom start command for all containers (useful for debugging)')
     parser_sc.add_argument(
             '--verbose', '-V',

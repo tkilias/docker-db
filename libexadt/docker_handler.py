@@ -1,4 +1,4 @@
-import sys,os,docker,EXAConf,pprint,shutil,device_handler
+import os,docker,EXAConf,pprint,shutil,device_handler
 from docker.utils import kwargs_from_env
 
 ip_types = { 4: 'ipv4_address', 6: 'ipv6_address' }
@@ -15,14 +15,13 @@ class docker_handler:
     """ Implements all docker commands. Depends on the 'docker' python module (https://github.com/docker/docker-py). """
 
 #{{{ Init
-    def __init__(self, verbose):
+    def __init__(self, verbose=False):
         """
         Creates a new docker_handler and a docker.APIClient (used for communication with the docker service).
         """
         self.client = docker.APIClient(timeout=20, **kwargs_from_env())
         self.verbose = verbose
-        # Flush STDOUT continuously
-        sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
+        self.def_container_cmd = None 
 #}}}
 
 #{{{ Set EXAConf object for this instace of docker-handler
@@ -33,6 +32,7 @@ class docker_handler:
         self.exaconf = exaconf
         self.cluster_name = self.exaconf.get_cluster_name()
         self.image = self.exaconf.get_docker_image()
+        self.def_container_cmd = os.path.join(self.exaconf.os_dir, "libexec/exainit.py")
 #}}}
 
 #{{{ Docker version (debug)
@@ -170,8 +170,26 @@ class docker_handler:
         return my_containers
 #}}}
  
+#{{{ Get image conf
+    def get_image_conf(self, image_name):
+        """
+        Returns a config containing information about the given image (e. g. all labels).
+        """
+
+        image_conf = EXAConf.config()
+        try:
+            image = self.client.inspect_image(image_name)
+        except docker.errors.APIError as e:
+            raise DockerError("Failed to query information about image '%s': %s" % (image_name, e))
+        # add labels
+        image_conf['labels'] =  EXAConf.config()
+        for item in image['ContainerConfig']['Labels'].iteritems():
+            image_conf['labels'][item[0]] = item[1]
+        return image_conf
+#}}}
+
 #{{{ Create containers
-    def create_containers(self, networks, cmd):
+    def create_containers(self, networks, cmd=None):
         """ 
         Creates one container per node. Takes care of volumes, block-devices, environment, labels
         and additional container configuration.
@@ -263,6 +281,7 @@ class docker_handler:
             if cmd and cmd != "":
                 print "Creating container '%s' with custom command '%s'..." % (container_name, cmd),
             else:
+                cmd = self.def_container_cmd
                 print "Creating container '%s'..." % container_name,
             try:
                 container = self.client.create_container(self.image,
@@ -414,7 +433,7 @@ class docker_handler:
 #}}}
  
 #{{{ Start cluster
-    def start_cluster(self, cmd):
+    def start_cluster(self, cmd=None):
         """
         Starts the given cluster by:
             - checking the available free space (in case of file-devices)
@@ -445,7 +464,7 @@ class docker_handler:
             raise e
         # 4. create containers
         try:
-            containers = self.create_containers(networks, cmd)
+            containers = self.create_containers(networks, cmd=cmd)
         except DockerError as e:
             print "Error during startup! Cleaning up..."
             self.stop_cluster(30)            

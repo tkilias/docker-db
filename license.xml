@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<license>
+<companyName>EXASOL</companyName>
+<comment>EXASOL Free Small Business Edition Advanced</comment>
+<memory>200</memory>
+<distributor>EXASOL AG</distributor>
+<distributorID>10001</distributorID>
+<licenseID>526</licenseID>
+
+<features>
+        <feature>
+                <name>Geospatial</name>
+        </feature>
+        <feature>
+                <name>LDAP authentication</name>
+        </feature>
+        <feature>
+                <name>Python</name>
+        </feature>
+        <feature>
+                <name>Query cache</name>
+        </feature>
+        <feature>
+                <name>Graph search</name>
+        </feature>
+        <feature>
+                <name>Generic JDBC connections</name>
+        </feature>
+        <feature>
+                <name>Lua</name>
+        </feature>
+        <feature>
+                <name>Skyline</name>
+        </feature>
+        <feature>
+                <name>R</name>
+        </feature>
+        <feature>
+                <name>Native Oracle connections</name>
+        </feature>
+        <feature>
+                <name>Java</name>
+        </feature>
+        <feature>
+                <name>eUDF</name>
+        </feature>
+</features>
+<limits>
+        <limit>
+                <name>Cluster nodes</name>
+                <value>1</value>
+        </limit>
+</limits>
+<keys>
+<licenseKey>
+eJwdlDlyw0AMBHO9xJEK9/EHfUK5A/8/coMquyRySexMY7A/v3/6+oSEzcZaR+q4hlp79cjEjpdE
+R1houM14q4vVBuu7z1LOjJblhHmppXem+KY566NpItK9s1I8Zcp1h9hEb7spe19J/mTVxqpluutu
+hTil9p7Ztc1CEKVyRAVd3NT1svGR4LGskrbSGt6QNCsqaHvHmTsZfEJaMhMVLKAudGskpyuwqMmv
+3E3p9bHumQqZsSl31EnhK/BYqhRdVNqiAEjpUomeLJOy1mlXLoQfY7k6qaCxiMpJqqHcd8FIOcjN
+eqBrHQiIEA94Gxz4bB+F8ARIpIQ/BfSccuuAusy2msXQvJUt+hcF66Fph9ji+CJL1dnYcVDasl0A
+V0Rk4Akt7BoBRehmOteBIhAtjBIngJorfV0GY8F8coenFWaC0dtETnrR4EYa7kSGVy5GdhyGUlDm
+zcQs2xIW4NOkpHe8DPl1qwL/8LR6XFPhRacRYzCkmiI5rK8w7wGTUtI4QYVqXUSUbQgxGVJtUkGn
+sjd6kurrCrxyNsYVcUXkZZeBUBKDvKbQI+b6MLwuF36wNU2J80P9JgLIAQlIgQtxoogPPsbMxPWd
+O6De6wnkXTbdiRcAYw7k0ODCDN3gmnACuBmeGNq8/DM0dBerwYpewtEFdvwxLJiOCyvaZYOQD199
+3pNuQPGC0JjuZ9yeZpOB6xjNLrrk0MMVSQzmBcyHcoGEC8i7bbMY7edO7aIoxJLhx5bt5Yl7wKQq
+D8dmXAVGlYwRUuMw8OlzRspDmyrLpFOKkHGSkCwSl0OYUjhoOAcYdg4cINFNJBN+PTss3NgyU04W
+XDh9aupuVHI0fV7f9z+Ubf6/
+</licenseKey>
+</keys>
+</license>

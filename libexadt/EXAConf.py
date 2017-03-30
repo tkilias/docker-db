@@ -58,6 +58,7 @@ class EXAConf:
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         # static values
+        self.max_reserved_node_id = 10 # IDs 0-10 are reserved
         self.container_root = "/exa"
         self.node_root_prefix = "n"
         self.dev_prefix = "dev."
@@ -91,7 +92,7 @@ class EXAConf:
         self.conf_path = os.path.join(self.root, "EXAConf")
         # if initialized is true, the given file has to exist!
         if initialized and not os.path.exists(self.conf_path):
-            raise EXAConfError("EXAConf file '%s' does not exist!" % self.conf_path)
+            raise EXAConfError("EXAConf file '%s' does not exist! Has the cluster been initialized?" % self.conf_path)
         # read / create configuration
         try:
             self.config = configobj.ConfigObj(self.conf_path,
@@ -243,7 +244,8 @@ class EXAConf:
 #}}}
 
 #{{{ (Re-)initialize a configuration
-    def initialize(self, name, image, num_nodes, device_type, force, platform, db_version=None, license=None):
+    def initialize(self, name, image, num_nodes, device_type, force, platform, 
+                   db_version=None, os_version=None, license=None):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
@@ -259,9 +261,11 @@ class EXAConf:
         # sanity checks
         if not self.platform_supported(platform):
             raise EXAConfError("Platform '%s' is not supported!") % platform
-        # set db version if given (and modify path)
-        if db_version and db_version != "":
+        # set db and os version if given
+        if db_version and db_version.strip() != "":
             self.set_db_version(db_version.strip())
+        if os_version and os_version.strip() != "":
+            self.set_os_version(os_version.strip())
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
@@ -286,12 +290,12 @@ class EXAConf:
             # comments
             self.config.comments["Docker"] = ["\n","Docker related options"]
             docker_sec.comments["RootDir"] = ["The directory that contains all data related to this docker cluster","(except for mapped devices)"]
-            docker_sec.comments["Image"] = ["The EXABase docker image used for all containers of this cluster"]
+            docker_sec.comments["Image"] = ["The EXASOL docker image used for all containers of this cluster"]
             docker_sec.comments["DeviceType"] = ["The type of storage devices for this cluster: 'block' or 'file'"]
 
         # Node sections
-        for node in range (0, num_nodes):
-            node_id = 10 + node
+        for node in range (1, num_nodes+1):
+            node_id = self.max_reserved_node_id + node
             node_section =  "Node : " + str(node_id)     
             self.config[node_section] = {}
             node_sec = self.config[node_section]
