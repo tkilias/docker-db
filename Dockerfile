@@ -12,6 +12,7 @@ LABEL osversion="6.0.0"
 LABEL license="Proprietary"
 LABEL vendor="EXASOL AG"
                                   
+ENV PATH=/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/bin:/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/sbin:/usr/opt/EXASuite-6/EXARuntime-6.0.0/bin:/usr/opt/EXASuite-6/EXARuntime-6.0.0/bin:/usr/opt/EXASuite-6/EXASolution-6.0.0/bin/Console:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ADD EXAClusterOS-6.0.0_LS-6.0.0-CentOS-6.8_x86_64.tar.gz              /
 
 CMD /usr/opt/EXASuite-6/EXAClusterOS-6.0.0/libexec/exainit.py
