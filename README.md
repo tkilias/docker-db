@@ -14,15 +14,6 @@ Currently supported features:
 - update the virtual cluster
 - create backups on archive volumes
 
-Features to be supported soon:
-- block devices for data storage
-- backups on remote volumes
-- license handling
-
-Features still in development:
-- multinode setup
-- XML/RPC interface
-
 # How to use this image
 
 - Pull the image to your Docker host:
