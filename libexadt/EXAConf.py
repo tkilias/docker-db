@@ -271,7 +271,7 @@ class EXAConf:
         glob_sec = self.config["Global"]
         glob_sec["ClusterName"] = name
         glob_sec["Platform"] = platform
-        glob_sec["LicenseFile"] = license if license else ""
+        glob_sec["LicenseFile"] = os.path.abspath(license) if license else ""
         glob_sec["CoredPort"] = "10001"
         glob_sec["Networks"] = "private"
         glob_sec["ConfVersion"] = self.version
