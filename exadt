@@ -190,7 +190,7 @@ def init_cluster(cmd):
         print "Root directory '%s' does not exist (or is a file)!" % root
         sys.exit(1)
     if not os.path.isfile(cmd.license):
-        print "License '%s' does not exist (or is a directory)!" % cmd.license
+        print "License '%s' does not exist (or is a directory)!" % os.path.abspath(cmd.license)
         sys.exit(1)
     # check params
     if cmd.device_type and cmd.device_type not in ['block','file']:

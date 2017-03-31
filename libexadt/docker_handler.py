@@ -449,14 +449,14 @@ class docker_handler:
             dh = device_handler.device_handler(self.exaconf)
             if dh.check_free_space() == False:
                 raise DockerError("Check for space usage failed! Aborting startup.")
-        # 2. copy EXAConf to all node volumes
+        # 2. copy EXAConf and license to all node volumes
         conf_path = self.exaconf.get_conf_path()
-        license_path = self.exaconf.get_license_file()
+        license = self.exaconf.get_license_file()
         node_volumes = self.exaconf.get_docker_node_volumes()
         print "Copying EXAConf to all node volumes."
         for n,volume in node_volumes.iteritems():
-            shutil.copy(conf_path, os.path.join(volume, "etc"))
-            shutil.copy(license_path, os.path.join(volume, "etc"))
+            shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
+            shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
         # 3. create networks
         try:
             networks = self.create_networks()
