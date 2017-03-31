@@ -6,7 +6,7 @@ RUN yum update -y
 RUN yum install -y java-1.8.0-openjdk-headless openssh-server openssh-clients which sudo vim tar rsync
 
 LABEL name="EXASOL DB Docker Image"
-LABEL version="6.0.0"
+LABEL version="6.0.0-d1"
 LABEL dbversion="6.0.0"
 LABEL osversion="6.0.0"
 LABEL license="Proprietary"
