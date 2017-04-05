@@ -29,20 +29,16 @@ Known issues:
   ```console
   $ docker pull exasol/docker-db:6.0.0-d1
   ```
-  &nbsp;
 - Install the `exadt` dependencies:
   ```console
   $ pip install docker ipaddr ConfigObj
   ```
-  &nbsp;
 - Install `exadt`:
   ```console
   $ git clone https://github.com/EXASOL/docker-db.git
   $ cd docker-db
   ```
-  &nbsp;
 - Create and configure your virtual EXASOL cluster by using the commands described in the `exadt` documentation below.
-  &nbsp;
 
 # EXASOL Docker Tool — `exadt`
 
