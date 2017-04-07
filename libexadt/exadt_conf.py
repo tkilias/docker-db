@@ -1,4 +1,5 @@
 import os, ConfigParser
+from EXAConf import config
  
 #{{{ Class ConfError
 class ConfError(Exception):
@@ -114,7 +115,7 @@ class exadt_conf:
         """ 
         Returns a dict containing all clusters and their root directory. 
         """
-        clusters = {}
+        clusters = config()
         for section in self.config.sections():
             cluster = self.extract_name(section)
             clusters[cluster] = self.get_root(cluster)

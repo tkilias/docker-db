@@ -3,6 +3,8 @@
 import sys, os, argparse, pprint
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, utils
 from shutil import rmtree
+from libexadt.EXAConf import config
+
 #import sys
 #sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/lib')
 #sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.0/share/exaoperation')
@@ -54,6 +56,7 @@ def create_cluster(cmd):
     conf = exadt_conf.exadt_conf()
     # always us absolute path
     root = os.path.abspath(cmd.root)
+    root = os.path.normpath(root)
     # create root-directory if requested
     if cmd.create_root:
         try: 
@@ -274,21 +277,45 @@ def list_clusters(cmd):
     if len(clusters) == 0:
         print "No clusters found in %s." % conf.get_conf_paths()
         sys.exit(0)
-    # create list containing the column widths (use max. len of each column entry)
-    width = [0] * 3
-    width[0] = max(max(len(c) for c in clusters.iterkeys()), len("CLUSTER"))
-    width[1] = max(max(len(os.path.normpath(root)) for root in clusters.itervalues()), len("ROOT"))
-    width[2] = len("IMAGE")
-    print " %- *s   %- *s   %- *s" % (width[0], "CLUSTER", width[1], "ROOT", width[2], "IMAGE")
+
+    # build dict containg all information
+    width = [len("CLUSTER"), len("ROOT"), len("IMAGE"), len("DB VERSION"), len("OS VERSION")]
+    clusters_info = config()
     for cluster,root in clusters.items():
+        ci = config({"root" : os.path.normpath(root),
+                     "image" : "<uninitialized>",
+                     "db_version" : "<unknown>",
+                     "os_version" : "<unknown>"})
+        #cluster may be uninitialized
         try:
             exaconf = EXAConf.EXAConf(root, True)
-            image = exaconf.get_docker_image()
+            ci.image = exaconf.get_docker_image()
         except EXAConf.EXAConfError:
-            image = "<uninitialized>"
-        print " %- *s   %- *s   %- s" % (width[0], cluster,
-                                         width[1], os.path.normpath(root),
-                                         image)
+            pass
+        #query image info if it's initialized
+        if ci.image != "<uninitialized>":
+            try:
+                dh = docker_handler.docker_handler()
+                ic = dh.get_image_conf(ci.image)
+                ci.db_version = ic.labels.dbversion
+                ci.os_version = ic.labels.osversion
+            except docker_handler.DockerError as e:
+                print e
+        clusters_info[cluster] = ci
+        # update column widths
+        width[0] = max(width[0], len(cluster))
+        width[1] = max(width[1], len(ci.root))
+        width[2] = max(width[2], len(ci.image))
+        width[3] = max(width[3], len(ci.db_version))
+        width[4] = max(width[4], len(ci.os_version))
+                
+    print " %- *s   %- *s   %- *s   %- *s   %- *s" % (width[0], "CLUSTER", width[1], "ROOT", width[2], "IMAGE", width[3], "DB VERSION", width[4], "OS VERSION")
+    for cluster,ci in clusters_info.iteritems():
+        print " %- *s   %- *s   %- *s   %- *s   %- *s" % (width[0], cluster,
+                                                          width[1], ci.root,
+                                                          width[2], ci.image,
+                                                          width[3], ci.db_version,
+                                                          width[4], ci.os_version)
 #}}}
 
 #{{{ Docker version
@@ -393,7 +420,7 @@ def ps(cmd):
     try:
         dh = docker_handler.docker_handler()
         dh.set_exaconf(exaconf)
-        containers = dh.get_all_containers()
+        containers = dh.get_containers()
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)

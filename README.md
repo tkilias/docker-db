@@ -13,16 +13,6 @@ Currently supported features:
 - update the virtual cluster
 - create backups on archive volumes
 
-Known issues:
-1. Using `--auto-storage` Flag and adding additional EXAStorage Devices may result in following error:
-   ```console
-   Free space on '/' is only 174.7 GiB, but accumulated size of (sparse) file-devices is 180.0 GiB!
-   ```
-   Please do not add additional EXAStorage Devices if `--auto-storage` flag is used.
-   &nbsp;
-1. Changing the DB Memory in `EXAConf` after the cluster was running has no effect.
-   &nbsp;
-
 # How to use this image
 
 - Pull the image to your Docker host:
@@ -228,4 +218,4 @@ A cluster has to be stopped before it can be deleted (even if all containers are
 `exadt` and the EXASOL Docker image have been developed and tested with Docker version 1.12.x. It may also work with earlier versions, but that is not guaranteed.
 
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
- 
+

@@ -1,5 +1,6 @@
 import os,docker,EXAConf,pprint,shutil,device_handler
 from docker.utils import kwargs_from_env
+from libexadt.EXAConf import config
 
 ip_types = { 4: 'ipv4_address', 6: 'ipv6_address' }
  
@@ -156,15 +157,15 @@ class docker_handler:
         return container['Names'][0].lstrip("/")
 #}}}
 
-#{{{ Get all containers
-    def get_all_containers(self):
+#{{{ Get containers
+    def get_containers(self, all=True):
         """ 
-        Returns a list of all containers of the current cluster (no matter what their status is). 
+        Returns a list of all containers of the current cluster (only running ones if all==False). 
         They are identified using the 'ClusterName' label.
         """
 
         try:
-            my_containers = self.client.containers(all=True, filters = {'label':'ClusterName=' + self.cluster_name})
+            my_containers = self.client.containers(all=all, filters = {'label':'ClusterName=' + self.cluster_name})
         except docker.errors.APIError as e:
             raise DockerError("Failed to query containers for cluster '%s': %s" % (self.cluster_name, e))
         return my_containers
@@ -176,13 +177,13 @@ class docker_handler:
         Returns a config containing information about the given image (e. g. all labels).
         """
 
-        image_conf = EXAConf.config()
+        image_conf = config()
         try:
             image = self.client.inspect_image(image_name)
         except docker.errors.APIError as e:
             raise DockerError("Failed to query information about image '%s': %s" % (image_name, e))
         # add labels
-        image_conf['labels'] =  EXAConf.config()
+        image_conf['labels'] =  config()
         for item in image['ContainerConfig']['Labels'].iteritems():
             image_conf['labels'][item[0]] = item[1]
         return image_conf
@@ -359,7 +360,7 @@ class docker_handler:
         they are killed.
         """
 
-        containers = self.get_all_containers()
+        containers = self.get_containers()
         if len(containers) == 0:
             print "No containers found for cluster '%s'." % self.cluster_name
             return False
@@ -400,7 +401,7 @@ class docker_handler:
         Removes all exited containers (they have to be stopped before calling this function).
         """
 
-        containers = self.get_all_containers()
+        containers = self.get_containers()
         if len(containers) == 0:
             print "No containers found for cluster '%s'." % self.cluster_name
             return False
@@ -425,7 +426,7 @@ class docker_handler:
         and not stopped (there may be crashed containers, though).
         """
 
-        containers = self.get_all_containers()
+        containers = self.get_containers()
         if containers and len(containers) > 0:
             return True
         else:
