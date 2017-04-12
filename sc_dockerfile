@@ -18,5 +18,6 @@ ADD EXAClusterOS-6.0.0_LS-6.0.0-CentOS-6.8_x86_64.tar.gz              /
 COPY license.xml /exa/etc/license.xml
 COPY sc.conf /exa/etc/EXAConf
 COPY sc_init.sh /exa/etc/sc_init.sh
+# COPY myjarfile.jar /exa/data/bucketfs/bfsdefault/default/myjarfile.jar
 
 CMD /bin/sh /exa/etc/sc_init.sh
