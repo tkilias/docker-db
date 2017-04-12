@@ -219,3 +219,18 @@ A cluster has to be stopped before it can be deleted (even if all containers are
 
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
 
+# Using self contained version
+
+A self contained docker image is a version of the image which does not require `exadt` tool and do not require docker volumes to be mounted, if a container of such image is removed, then all data are lost. To use this version, simply type following commands:
+
+```console
+$ docker pull exasol/docker-db:6.0.0-d1sc
+$ docker run --rm --privileged exasol/docker-db:6.0.0-d1sc
+```
+
+To build own self contained image version, use the files from the github repository:
+```console
+$ docker build -f sc_dockerfile .
+```
+
+In file `sc.conf` is the container configuration and `sc_init.sh` contains the initialization steps, required for a self contained image.
