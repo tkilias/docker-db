@@ -1,12 +1,10 @@
-# What is EXASOL?
+# EXASOL Docker version
 
-EXASOL is the intelligent, high-performance in-memory analytic database that just works.
-
-# What is in this repository?
+EXASOL is a high-performance, in-memory, MPP database specifically designed for analytics. 
+This repository contains a dockerized version of the EXASOL DB for testing purpose.
 
 ###### Please note that this is an open source project which is *not officially supported* by EXASOL. We will try to help you as much as possible, but can't guarantee anything since this is not an official EXASOL product.
 
-This repository contains a dockerized version of the EXASOL DB version 6.0 suitable for testing.
 
 Currently supported features:
 - create / start / stop a database in a virtual cluster
