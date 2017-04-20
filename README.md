@@ -4,6 +4,8 @@ EXASOL is the intelligent, high-performance in-memory analytic database that jus
 
 # What is in this repository?
 
+###### Please note that this is an open source project which is officially supported by EXASOL. For any question, you can contact our support team.
+
 This repository contains a dockerized version of the EXASOL DB version 6.0 suitable for testing.
 
 Currently supported features:
