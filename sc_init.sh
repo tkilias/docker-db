@@ -3,15 +3,19 @@
 if [ ! -e /exa/data/storage/dev.1.data ]; then
     mkdir -p /exa/etc /exa/metadata/storage /exa/metadata/dwad /exa/data/storage /exa/data/bucketfs /exa/logs/logd
     chown -R 500:500 /exa
-    dd if=/dev/zero of=/exa/data/storage/dev.1.meta bs=1048576 count=1
-    dd if=/dev/zero of=/exa/data/storage/dev.1.data seek=9216 bs=1048576 count=1
+    dd if=/dev/zero of=/exa/data/storage/dev.1.meta bs=1048576 count=1 >/var/log/dev.1.out 2>&1
+    dd if=/dev/zero of=/exa/data/storage/dev.1.data seek=9216 bs=1048576 count=1 >>/var/log/dev.1.out 2>&1
 fi
 
 export EXA_NODE_ID=11
 export HOSTNAME="n$EXA_NODE_ID"
 hostname "$HOSTNAME"
 
-CURIP="$(/sbin/ip addr | awk '{ if (n>0) { n+=1; } if (n==3) { print $2; n=0; } } /state UP/{ n=1; }')"
+while true; do
+    CURIP="$(/sbin/ip addr | awk '{ if (n>0) { n+=1; } if (n==3) { print $2; n=0; } } /state UP/{ n=1; }')"
+    [ ! -z "$CURIP" ] && break
+    sleep 1
+done
 sed -i "s+XXX.XXX.XXX.XXX/XX+$CURIP+" /exa/etc/EXAConf
 
 exec /usr/opt/EXASuite-6/EXAClusterOS-6.0.0/libexec/exainit.py
