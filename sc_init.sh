@@ -16,6 +16,7 @@ while true; do
     [ ! -z "$CURIP" ] && break
     sleep 1
 done
-sed -i "s+XXX.XXX.XXX.XXX/XX+$CURIP+" /exa/etc/EXAConf
+sed -i "s+PrivateNet *= *.*$+PrivateNet = $CURIP+" /exa/etc/EXAConf || echo "FAILED TO WRITE THE NETWORK CONFIGURATION TO EXAConf!"
+rm -f /var/run/ecos_unix_auth
 
 exec /usr/opt/EXASuite-6/EXAClusterOS-6.0.0/libexec/exainit.py
