@@ -10,9 +10,10 @@ fi
 export EXA_NODE_ID=11
 export HOSTNAME="n$EXA_NODE_ID"
 hostname "$HOSTNAME"
+/sbin/ip addr
 
 while true; do
-    CURIP="$(/sbin/ip addr | awk '{ if (n>0) { n+=1; } if (n==3) { print $2; n=0; } } /state UP/{ n=1; }')"
+    CURIP="$(/sbin/ip addr | awk '{ if (n>0) { n+=1; } if (n==3) { net=$2; n=0; } } /state UP/{ n=1; } END { print net; }')"
     [ ! -z "$CURIP" ] && break
     sleep 1
 done
