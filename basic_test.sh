@@ -15,10 +15,14 @@ set -x &&
 "$BINARY" list-clusters &&
 "$BINARY" create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster &&
 "$BINARY" list-clusters &&
-"$BINARY" init-cluster --image exasol/docker-db:6.0.0-d1 --license ./license.xml --device-type file --auto-storage --force MyCluster &&
+"$BINARY" init-cluster --image exasol/docker-db:6.0.1-d1 --license ./license.xml --device-type file --auto-storage --force MyCluster &&
 "$BINARY" list-clusters &&
 "$BINARY" start-cluster MyCluster &&
 "$BINARY" ps MyCluster &&
+"$BINARY" exec -c "/bin/date" -a MyCluster &&
+sleep 3
+"$BINARY" stop-db MyCluster &&
+"$BINARY" start-db MyCluster &&
 "$BINARY" stop-cluster MyCluster &&
 "$BINARY" create-file-devices --size 10GiB MyCluster &&
 yes | "$BINARY" create-file-devices --size 10GiB MyCluster --replace --path $HOME &&

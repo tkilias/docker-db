@@ -5,7 +5,6 @@ This repository contains a dockerized version of the EXASOL DB for testing purpo
 
 ###### Please note that this is an open source project which is *not officially supported* by EXASOL. We will try to help you as much as possible, but can't guarantee anything since this is not an official EXASOL product.
 
-
 Currently supported features:
 - create / start / stop a database in a virtual cluster
 - use the UDF framework
@@ -17,11 +16,11 @@ Currently supported features:
 
 - Pull the image to your Docker host:
   ```console
-  $ docker pull exasol/docker-db:6.0.0-d1
+  $ docker pull exasol/docker-db:latest
   ```
 - Install the `exadt` dependencies:
   ```console
-  $ pip install docker ipaddr ConfigObj
+  $ pip install --upgrade docker ipaddr ConfigObj
   ```
 - Install `exadt`:
   ```console
@@ -62,7 +61,7 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the type of EXAStorage devices (currently only 'file' is supported)
 
 ```console
-$ ./exadt init-cluster --image exasol/docker-db:6.0.0-d1 --license ./license.xml --device-type file --auto-storage --force MyCluster
+$ ./exadt init-cluster --image exasol/docker-db:latest --license ./license.xml --device-type file --auto-storage MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```
@@ -161,8 +160,8 @@ All containers of an existing cluster can be listed by executing:
 
 ```console
 $ ./exadt ps MyCluster
- NODE ID      STATUS          IMAGE                       HOSTNAME   CONTAINER ID   CONTAINER NAME    EXPOSED PORTS       
- 11           Up 5 seconds    exasol/docker-db:6.0.0-d1   n11        e9347c3e41ca   MyCluster_11      8898->8888,6593->6583
+ NODE ID      STATUS          IMAGE                       NAME   CONTAINER ID   CONTAINER NAME    EXPOSED PORTS       
+ 11           Up 5 seconds    exasol/docker-db:6.0.0-d1   n11    e9347c3e41ca   MyCluster_11      8899->8888,6594->6583
 ```
 
 The `EXPOSED PORTS` column shows all container ports that are reachable from outside the local host ('host'->'container'), usually one for the database and one for BucketFS.
@@ -188,9 +187,9 @@ A cluster can be updated by exchanging the EXASOL Docker image:
 $ docker pull exasol/docker-db:latest
 $ ./exadt update-cluster --image exasol/docker-db:latest MyCluster
 Cluster 'MyCluster' has been successfully updated!
-- Image :  exasol/docker-db:6.0.beta3 --> exasol/docker-db:6.0.0-d1
-- DB    :  6.0.beta3                  --> 6.0.0
-- OS    :  6.0.beta3                  --> 6.0.0
+- Image :  exasol/docker-db:6.0.0-d1 --> exasol/docker-db:6.0.0-d2
+- DB    :  6.0.0                     --> 6.0.1
+- OS    :  6.0.0                     --> 6.0.0
 Restart the cluster in order to apply the changes.
 ```
 
@@ -212,25 +211,32 @@ Successfully removed cluster 'MyCluster'.
 Note that all file devices (even the mapped ones) and the root directory are deleted. You can use `--keep-root` and `--keep-mapped-devices` in order to prevent this.
 
 A cluster has to be stopped before it can be deleted (even if all containers are down)!
-  
-# Supported Docker versions
 
-`exadt` and the EXASOL Docker image have been developed and tested with Docker version 1.12.x. It may also work with earlier versions, but that is not guaranteed.
+# Using the self contained image version
 
-Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
+The self contained EXASOL docker image does not require `exadt` and no docker volumes need to be mounted. All data is stored within the container and if a container of that image is removed, all data is lost. 
 
-# Using the self contained EXASOL version for Docker
-
-A self contained docker image is a version of the image which does not require `exadt` tool and do not require docker volumes to be mounted, if a container of such image is removed, then all data are lost. To use this version, simply type following commands:
+In order to use the self contained image version, execute the following commands:
 
 ```console
 $ docker pull exasol/docker-db:6.0.0-d1sc
 $ docker run --rm --privileged exasol/docker-db:6.0.0-d1sc
 ```
 
-To build own self contained image version, use the files from the github repository:
+In order to build your own self contained image version, use the files from the github repository:
 ```console
 $ docker build -f sc_dockerfile .
 ```
 
-In file `sc.conf` is the container configuration and `sc_init.sh` contains the initialization steps, required for a self contained image.
+The file `sc.conf` contains the cluster configuration (`EXAConf`) and `sc_init.sh` contains the initialization steps that are required for a self contained image.
+   
+# Supported Docker versions
+
+`exadt` and the EXASOL Docker image have been developed and tested with Docker 17.04.0-ce (API 1.28) and docker-py 2.2.1. It may also work with earlier versions, but that is not guaranteed.
+ 
+# Supported OS
+
+`exadt` currently only supports Docker on Linux (tested with Fedora). If you are using a Windows host you'd have to create a Linux VM.
+ 
+Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
+ 

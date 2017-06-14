@@ -1,5 +1,5 @@
 import os, stat, ipaddr, configobj
-from utils import units2bytes, bytes2units, gen_base64_passwd
+from utils import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid
 from collections import OrderedDict as odict
 
 #{{{ Class EXAConfError
@@ -54,9 +54,10 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.0"
+        self.version = "6.0.1"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
+        self.img_version = self.version
         # static values
         self.max_reserved_node_id = 10 # IDs 0-10 are reserved
         self.container_root = "/exa"
@@ -68,11 +69,14 @@ class EXAConf:
         self.storage_dir = "data/storage"
         self.bucketfs_dir = "data/bucketfs"
         self.etc_dir = "etc"
+        self.ssl_dir = "etc/ssl"
         self.md_dir = "metadata"
         self.md_storage_dir = "metadata/storage"
         self.md_dwad_dir = "metadata/dwad"
         self.log_dir = "logs"
         self.logd_dir = "logs/logd"
+        self.cored_log_dir = "logs/cored"
+        self.db_log_dir = "logs/db"
         self.node_uuid = "etc/node_uuid"
         self.supported_platforms = ['Docker', 'VM']
         self.def_bucketfs = "bfsdefault"
@@ -80,6 +84,8 @@ class EXAConf:
         self.def_db_port = 8888
         self.def_bucketfs_http_port = 6583
         self.def_bucketfs_https_port = 0
+        self.def_docker_privileged = True
+        self.def_docker_network_mode = "bridge"
         # set root to container_root if omitted
         # --> only true when called from within the container
         if not root:
@@ -105,9 +111,77 @@ class EXAConf:
         # validate content if EXAConf is already initialized
         # also read current version numbers from config
         if initialized:
+            self.update_self()
             self.validate()
             self.set_os_version(self.config["Global"]["OSVersion"])
             self.set_db_version(self.config["Global"]["DBVersion"])
+            # has been introduced later, i. e. may be absent
+            if "ImageVersion" in self.config["Global"].scalars:
+                self.img_version = self.config["Global"]["ImageVersion"]
+#}}}
+
+#{{{ Compare versions
+    def compare_versions(self, first, second):
+        """
+        Compares the given version numbers (in format "X.X.X" or "X.X.X-dY") and returns
+        -1, 0 or 1 if first is found to be lower, equal or higher than second.
+        """
+        
+        first = first.strip()
+        second = second.strip()
+        #Strip the "-dY" part if found
+        first = first.split("-")[0]
+        second = second.split("-")[0]
+        # now compare the digits, starting from left (i. e. major version)
+        for (f,s) in zip(first.split("."), second.split(".")):
+            if f < s:
+                return -1
+            elif f > s:
+                return 1
+        return 0
+#}}}
+
+#{{{ Update self
+    def update_self(self):
+        """
+        Checks if the EXAConf version stored in the file is older than the current one and
+        updates options and section names and values is necessary.
+        """
+        conf_version = self.config["Global"]["ConfVersion"]
+        diff = self.compare_versions(self.version, conf_version)
+        if diff == 0:
+            return
+        # the EXAConf file is newer than the EXAConf module -> abort
+        if diff == -1:
+            raise EXAConfError("The version of the EXAConf file '%s' is higher (%s) than that of the EXAConf module (%s)! Please update your installation!" % (self.conf_path, conf_version, self.version))
+        # the EXAConf file is older than the EXAConf module -> update
+        if diff == 1:
+            print "Updating EXAConf '%s' from version '%s' to '%s'" % (self.conf_path, conf_version, self.version)
+            # 6.0.1 : 
+            # - "Hostname" renamed to "Name"
+            # - Introduced "Host"
+            if self.compare_versions("6.0.1", conf_version) == 1:
+                for section in self.config.sections:
+                    if self.is_node(section):
+                        node_sec = self.config[section]
+                        node_sec["Name"] = node_sec["Hostname"]
+                        del node_sec["Hostname"]
+                self.config["Global"]["ConfVersion"] = self.version
+                self.commit()
+#}}}
+
+#{{{ Check img comapt
+    def check_img_compat(self):
+        """
+        Checks if the EXAConf version and image version are identical. This has to be the case,
+        because there is also an EXAConf within the image and it could cause problems if they
+        had different versions.
+        """        
+        img_version = self.get_img_version()
+        if self.compare_versions(self.version, img_version) == 0:
+            return (True, self.version, img_version)
+        else:
+            return (False, self.version, img_version)
 #}}}
 
 #{{{ Set OS version
@@ -200,6 +274,17 @@ class EXAConf:
         self.set_os_version(os_version)
         self.commit()
 #}}}
+
+#{{{ Update image version
+    def update_img_version(self, img_version):
+        """
+        Updates the EXABase image version.
+        """
+
+        self.config["Global"]["ImageVersion"] = img_version
+        self.img_version = img_version.strip()
+        self.commit()
+#}}}
  
 #{{{ Clear configuration
     def clear_config(self):
@@ -243,9 +328,9 @@ class EXAConf:
         return "Global" in self.config.sections
 #}}}
 
-#{{{ (Re-)initialize a configuration
+#{{{ Initialize a configuration
     def initialize(self, name, image, num_nodes, device_type, force, platform, 
-                   db_version=None, os_version=None, license=None):
+                   db_version=None, os_version=None, img_version=None, license=None):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
@@ -266,6 +351,8 @@ class EXAConf:
             self.set_db_version(db_version.strip())
         if os_version and os_version.strip() != "":
             self.set_os_version(os_version.strip())
+        if img_version and img_version.strip() != "":
+            self.img_version = img_version
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
@@ -277,8 +364,19 @@ class EXAConf:
         glob_sec["ConfVersion"] = self.version
         glob_sec["OSVersion"] = self.os_version
         glob_sec["DBVersion"] = self.db_version
+        glob_sec["ImageVersion"] = self.img_version
         # comments
         glob_sec.comments["Networks"] = ["The type of networks for this cluster: 'public', 'private' or both."]
+
+        # SSL section
+        self.config["SSL"] = {}
+        ssl_sec = self.config["SSL"]
+        ssl_sec["Cert"] = "/path/to/ssl.crt"
+        ssl_sec["CertKey"] = "/path/to/ssl.key"
+        ssl_sec["CertAuth"] = "/path/to/ssl.ca"
+        #comments
+        self.config.comments["SSL"] = ["\n","SSL options"]
+        ssl_sec.comments["Cert"] = ["The SSL certificate, private key and CA for all EXASOL services"]
 
         # Docker section
         if platform == "Docker":
@@ -301,7 +399,7 @@ class EXAConf:
             node_sec = self.config[node_section]
             node_sec["PrivateNet"] = "10.10.10.%i/24" % node_id
             node_sec["PublicNet"] = ""
-            node_sec["Hostname"] = "n" + str(node_id)
+            node_sec["Name"] = "n" + str(node_id)
             # Docker specific options:
             if platform == "Docker":
                 node_sec["DockerVolume"] = "n" + str(node_id)
@@ -320,6 +418,12 @@ class EXAConf:
             self.config.comments[node_section] = ["\n"]
 
         # EXAStorage sections
+        self.config["EXAStorage"] = {}
+        storage_sec = self.config["EXAStorage"]
+        storage_sec["RecLimit"] = ""
+        #comments
+        self.config.comments["EXAStorage"] = ["\n", "Global EXAStorage options"]
+        storage_sec.comments["RecLimit"] = ["Max. throughput for background recovery / data restoration (in MiB/s)"]
         # data volume
         self.config["EXAVolume : DataVolume1"] = {}
         data_vol_sec = self.config["EXAVolume : DataVolume1"]
@@ -328,7 +432,7 @@ class EXAConf:
         data_vol_sec["Disk"] = ""
         data_vol_sec["Size"] = ""
         data_vol_sec["Redundancy"] = "1"
-        data_vol_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
+        data_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
         data_vol_sec["Labels"] = ""
         #comments
         self.config.comments["EXAVolume : DataVolume1"] = ["\n", "An EXAStorage data volume"]
@@ -347,7 +451,7 @@ class EXAConf:
         archive_vol_sec["Disk"] = ""
         archive_vol_sec["Size"] = ""
         archive_vol_sec["Redundancy"] = "1"
-        archive_vol_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
+        archive_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
         archive_vol_sec["Labels"] = ""
         #comments
         self.config.comments["EXAVolume : ArchiveVolume1"] = ["\n", "An EXAStorage archive volume"]
@@ -358,7 +462,7 @@ class EXAConf:
         db_sec["DataVolume"] = "DataVolume1"
         db_sec["ArchiveVolume"] = "ArchiveVolume1"
         db_sec["Version"] = str(self.db_version)
-        db_sec["Owner"] = str(os.getuid()) + " : " + str(os.getgid())
+        db_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
         db_sec["MemSize"] = '2 GiB'
         db_sec["Port"] = str(self.def_db_port)
         db_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
@@ -372,7 +476,7 @@ class EXAConf:
         # BucketFS section
         self.config["BucketFS"] = {}
         glob_bfs_sec = self.config["BucketFS"]
-        glob_bfs_sec["ServiceOwner"] = str(os.getuid()) + " : " + str(os.getgid())
+        glob_bfs_sec["ServiceOwner"] = str(get_euid()) + " : " + str(get_egid())
         #comments
         self.config.comments["BucketFS"] = ["\n","Global BucketFS options"]
         glob_bfs_sec.comments["ServiceOwner"] = ["User and group ID of the BucketFS process."]
@@ -413,6 +517,7 @@ class EXAConf:
         # validation only makes sense after initalization
         if not self.initialized():
             raise EXAConfError("Configuration is not initialized! Use 'init-cluster' in order to initialize it.")
+
         # public network is optional
         have_priv_net = self.has_priv_net()
         have_pub_net = self.has_pub_net()
@@ -426,18 +531,18 @@ class EXAConf:
                 raise EXAConfError("Docker platform is specified but 'Docker' section is missing!")
 
         # check for duplicate entries in node sections 
-        hostnames = []
+        node_names = []
         docker_volumes = []
         all_priv_nets = []
         all_pub_nets = []
         for section in self.config.sections:
             if self.is_node(section):
                 node_sec = self.config[section]
-                # hostname
-                host = node_sec.get("Hostname")
-                if not host or host == "":
-                    raise EXAConfError("Hostname is missing in section '%s'!" % section)
-                hostnames.append(host)
+                # name
+                name = node_sec.get("Name")
+                if not name or name == "":
+                    raise EXAConfError("Name is missing in section '%s'!" % section)
+                node_names.append(name)
                 # docker volume (only for Docker installations!)
                 if have_docker:
                     volume = node_sec.get("DockerVolume")
@@ -478,9 +583,9 @@ class EXAConf:
                     raise EXAConfError("Detected duplicate devices in section '%s': %s" %(section, dup))
                 # TODO : check specified type vs. actual device type
         # check for duplicates and list them
-        dup = self.get_duplicates(hostnames)
+        dup = self.get_duplicates(node_names)
         if dup and len(dup) > 0:
-            raise EXAConfError("Detected duplicate hostnames: %s!" % dup)
+            raise EXAConfError("Detected duplicate node names: %s!" % dup)
         dup = self.get_duplicates(docker_volumes)
         if dup and len(dup) > 0:
             raise EXAConfError("Detected duplicate docker volumes: %s!" % dup)
@@ -732,6 +837,18 @@ class EXAConf:
         else:
             return self.os_version
 #}}}
+    
+#{{{ Get img version
+    def get_img_version(self):
+        """
+        Returns the current image version.
+        """
+        # has been introduced later, i. e. may be absent
+        if self.initialized() and "ImageVersion" in self.config["Global"].scalars:
+            return self.config["Global"]["ImageVersion"]
+        else:
+            return self.img_version
+#}}}
  
 #{{{ Get cored port
     def get_cored_port(self):
@@ -842,7 +959,7 @@ class EXAConf:
                 nid = self.get_section_id(section)
                 node_conf = config()
                 node_conf.id = nid
-                node_conf.hostname = node_sec["Hostname"]
+                node_conf.name = node_sec["Name"]
                 node_conf.private_net = node_sec["PrivateNet"]
                 node_conf.private_ip = node_conf.private_net.split("/")[0]
                 node_conf.public_net = node_sec["PublicNet"]
@@ -893,6 +1010,20 @@ class EXAConf:
         return len([sec for sec in self.config.sections if self.is_node(sec)])
 #}}}
 
+#{{{ Get storage conf
+    def get_storage_conf(self):
+        """
+        Returns the various configurable EXAStorage parameters.
+        """
+        storage_conf = config()
+        if "EXAStorage" not in self.config.sections:
+            raise EXAConfError("Section 'EXAStorage' does not exist in '%s'!" % (self.conf_path))
+        storage_sec = self.config["EXAStorage"]
+        if "RecLimit" in storage_sec.scalars and storage_sec["RecLimit"].strip() != "":
+            storage_conf.rec_limit = storage_sec["RecLimit"]
+        return storage_conf
+#}}}
+
 #{{{ Get storage volumes
     def get_storage_volumes(self, filters=None):
         """
@@ -907,29 +1038,37 @@ class EXAConf:
                 conf = config()
                 conf.name = vol_name
                 conf.type = vol_sec["Type"].strip()
-                conf.disk = vol_sec["Disk"].strip()
-                conf.redundancy = vol_sec.as_int("Redundancy")
-                conf.nodes = [ int(n.strip()) for n in vol_sec["Nodes"].split(",") if n.strip() != "" ]
-                conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else -1
-                conf.owner = tuple([ int(x.strip()) for x in vol_sec["Owner"].split(":") if x.strip() != "" ])
-                # optional values
-                if "NumMasterNodes" in vol_sec.scalars:
-                    conf.num_master_nodes = vol_sec["NumMasterNodes"]
-                else:
-                    conf.num_master_nodes = len(conf.nodes)
-                if "Labels" in vol_sec.scalars:
-                    conf.labels = [ l.strip() for l in vol_sec["Labels"].split(",") if l.strip() != "" ]
-                # HIDDEN optional values:
-                if "BlockSize" in vol_sec.scalars:
-                    conf.block_size = units2bytes(vol_sec["BlockSize"])
-                elif conf.type == "data":
-                    conf.block_size = 4096
-                elif conf.type == "archive":
-                    conf.block_size = 65536
-                if "StripeSize" in vol_sec.scalars:
-                    conf.stripe_size = units2bytes(vol_sec["StripeSize"])
-                else:
-                    conf.stripe_size = conf.block_size * 64
+                # data or archive volume
+                if conf.type == "data" or conf.type == "archive":
+                    conf.disk = vol_sec["Disk"].strip()
+                    conf.redundancy = vol_sec.as_int("Redundancy")
+                    conf.nodes = [ int(n.strip()) for n in vol_sec["Nodes"].split(",") if n.strip() != "" ]
+                    conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else -1
+                    conf.owner = tuple([ int(x.strip()) for x in vol_sec["Owner"].split(":") if x.strip() != "" ])
+                    # optional values
+                    if "NumMasterNodes" in vol_sec.scalars:
+                        conf.num_master_nodes = vol_sec["NumMasterNodes"]
+                    else:
+                        conf.num_master_nodes = len(conf.nodes)
+                    if "Labels" in vol_sec.scalars:
+                        conf.labels = [ l.strip() for l in vol_sec["Labels"].split(",") if l.strip() != "" ]
+                    # HIDDEN optional values:
+                    if "BlockSize" in vol_sec.scalars:
+                        conf.block_size = units2bytes(vol_sec["BlockSize"])
+                    elif conf.type == "data":
+                        conf.block_size = 4096
+                    elif conf.type == "archive":
+                        conf.block_size = 65536
+                    if "StripeSize" in vol_sec.scalars:
+                        conf.stripe_size = units2bytes(vol_sec["StripeSize"])
+                    else:
+                        conf.stripe_size = conf.block_size * 64
+                # remote volume
+                elif conf.type == "remote":
+                    conf.url = vol_sec["URL"].strip()
+                    conf.username = vol_sec["Username"].strip()
+                    conf.password = vol_sec["Password"].strip()
+                    conf.params = vol_sec["Params"].strip()
                 volume_configs[vol_name] = conf
         return self.filter_configs(volume_configs, filters)
 #}}}
@@ -1000,12 +1139,27 @@ class EXAConf:
         return bfs_config
 #}}}
 
+#{{{ Get ssl conf
+    def get_ssl_conf(self):
+        """
+        Returns the SSL configuration.
+        """
+        if "SSL" not in self.config.sections:
+            raise EXAConfError("Section 'SSL' does not exist in '%s'!" % (self.conf_path))
+        ssl_config = config()
+        ssl_sec = self.config["SSL"]
+        ssl_config.cert = ssl_sec["Cert"]
+        ssl_config.cert_key = ssl_sec["CertKey"]
+        ssl_config.cert_auth = ssl_sec["CertAuth"]
+        return ssl_config
+#}}}
+
 #{{{ Filter configs
     def filter_configs(self, configs, filters):
         """
         Applies the given filters (a dict) to the given config object by removing all items that
-        don't match the filter criteria. It assumes that 'configs' contains is in fact a dict
-        with config objects as values (e. g. some volumes or database configurations).
+        don't match the filter criteria. It assumes that 'configs' is in fact a dict with config 
+        objects as values (e. g. some volumes or database configurations).
         """
         if not filters:
             return configs
@@ -1080,5 +1234,22 @@ class EXAConf:
         conf.root_dir = docker_sec["RootDir"]
         conf.image = docker_sec["Image"]
         conf.device_type = docker_sec["DeviceType"]
+        # optional values
+        if "Privileged" in docker_sec.scalars and docker_sec["Privileged"] != "":
+            conf.privileged = docker_sec.as_bool("Privileged")
+        else:
+            conf.privileged = self.def_docker_privileged
+        if "CapAdd" in docker_sec.scalars and docker_sec["CapAdd"] != "":
+            conf.cap_add = [str(c) for c in docker_sec["CapAdd"].split(",") if c.strip() != ""]
+        else:
+            conf.cap_add = []
+        if "CapDrop" in docker_sec.scalars and docker_sec["CapDrop"] != "":
+            conf.cap_drop = [str(c) for c in docker_sec["CapDrop"].split(",") if c.strip() != ""]
+        else:
+            conf.cap_drop = []
+        if "NetworkMode" in docker_sec.scalars and docker_sec["NetworkMode"] != "":
+            conf.network_mode = docker_sec["NetworkMode"]
+        else:
+            conf.network_mode = self.def_docker_network_mode
         return conf
 #}}}

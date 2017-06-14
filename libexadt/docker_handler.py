@@ -16,13 +16,25 @@ class docker_handler:
     """ Implements all docker commands. Depends on the 'docker' python module (https://github.com/docker/docker-py). """
 
 #{{{ Init
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, quiet=False):
         """
         Creates a new docker_handler and a docker.APIClient (used for communication with the docker service).
         """
         self.client = docker.APIClient(timeout=20, **kwargs_from_env())
         self.verbose = verbose
+        self.quiet = quiet
+        if self.quiet:
+            self.verbose = False
         self.def_container_cmd = None 
+#}}}
+
+#{{{ log
+    def log(self, msg, no_nl=False):
+        if not self.quiet:
+            if no_nl:
+                print msg,
+            else:
+                print msg
 #}}}
 
 #{{{ Set EXAConf object for this instace of docker-handler
@@ -64,7 +76,7 @@ class docker_handler:
             except EXAConf.EXAConfError as e:
                 raise DockerError("Failed to read EXAConf: %s" % e)
             # create private network
-            print "Creating private network %s ('%s')..." % (priv_net, priv_net_name),
+            self.log("Creating private network %s ('%s')..." % (priv_net, priv_net_name), no_nl=True)
             ipam_pool = docker.types.IPAMPool(subnet = priv_net)
             ipam_config = docker.types.IPAMConfig(pool_configs = [ipam_pool])
             try:
@@ -74,14 +86,14 @@ class docker_handler:
                 net['MyName'] = priv_net_name
                 net['MyScope'] = 'private'
                 created_networks.append(net)
-                print "successful"
+                self.log("successful")
                 if self.verbose:
                     print "Created the following network:"
                     pprint.pprint(net)
             except docker.errors.APIError as e:
                 raise DockerError("Failed to create network: %s." % e)
         else:
-            print "No private network specified"
+            self.log("No private network specified")
    
         # public network
         have_pub_net = self.exaconf.has_pub_net()
@@ -92,7 +104,7 @@ class docker_handler:
             except EXAConf.EXAConfError as e:
                 raise DockerError("Failed to read EXAConf: %s" % e)
             # create public network (if any)
-            print "Creating public network %s ('%s')..." % (pub_net, pub_net_name),
+            self.log("Creating public network %s ('%s')..." % (pub_net, pub_net_name), no_nl=True)
             ipam_pool = docker.types.IPAMPool(subnet = pub_net)
             ipam_config = docker.types.IPAMConfig(pool_configs = [ipam_pool])
             try:
@@ -102,14 +114,14 @@ class docker_handler:
                 net['MyName'] = pub_net_name
                 net['MyScope'] = 'public'
                 created_networks.append(net)
-                print "successful"
+                self.log("successful")
                 if self.verbose:
                     print "Created the following network:"
                     pprint.pprint(net)
             except docker.errors.APIError as e:
                 raise DockerError("Failed to create network: %s." % e)
         else:
-            print "No public network specified."
+            self.log("No public network specified.")
 
         return created_networks
 #}}}
@@ -135,18 +147,22 @@ class docker_handler:
         except docker.errors.APIError as e:
             raise DockerError("Failed to query networks: %s." % e)
         if len(nets) == 0:
-            print "No networks found for cluster '%s'." % self.cluster_name
+            self.log("No networks found for cluster '%s'." % self.cluster_name)
         else:
+            err = False
             for net in nets:
                 if self.verbose:
                     print "Going to remove the following network:"
                     pprint.pprint(net)
                 try:
-                    print "Removing network '%s'..." % net['Name'],
+                    self.log("Removing network '%s'..." % net['Name'], no_nl=True)
                     self.client.remove_network(net['Id'])
-                    print "successful"
+                    self.log("successful")
                 except docker.errors.APIError as e:
                     print "Failed to remove network '%s' : %s" % (net['Name'], e)
+                    err = True
+            if err:
+                raise DockerError("Failed to remove all networks!")
 #}}}
  
 #{{{ Container name
@@ -190,7 +206,7 @@ class docker_handler:
 #}}}
 
 #{{{ Create containers
-    def create_containers(self, networks, cmd=None):
+    def create_containers(self, networks=None, cmd=None, auto_remove=False):
         """ 
         Creates one container per node. Takes care of volumes, block-devices, environment, labels
         and additional container configuration.
@@ -216,12 +232,21 @@ class docker_handler:
             raise DockerError("Failed to read EXAConf: %s" % e)
 
         if self.verbose:
-            print "Using image '%s' and cluster name '%s'" % (self.image, self.cluster_name)
+            print "Using image '%s' and cluster name '%s'." % (self.image, self.cluster_name)
 
+        if cmd and cmd != "":
+            self.log("Using custom command '%s'." % cmd)
+        else:
+            cmd = self.def_container_cmd
+                
         # separate  the first network from the remaing ones, so it can be given to
         # the container at creation time (necessary to avoid that the container 
         # is attached to the default network)
-        first_net = networks.pop(0)
+        first_net = None
+        net_conf = None
+        if networks and len(networks) > 0:
+            first_net = networks.pop(0)
+        # create containers for all nodes
         for node_id in nodes_conf.keys():
             container_name = self.cluster_name + "_" + str(node_id)
             my_conf = nodes_conf[node_id]
@@ -255,7 +280,7 @@ class docker_handler:
             for bfs_name in bucketfs_conf.fs.keys():
                 bfs_conf = bucketfs_conf.fs[bfs_name]
                 if bfs_conf.has_key("path") and bfs_conf.path != "":
-                    bfs_host = os.path.join(bfs_conf.path, my_conf.hostname, bfs_name)
+                    bfs_host = os.path.join(bfs_conf.path, my_conf.name, bfs_name)
                     bfs_container = os.path.join(self.exaconf.container_root, self.exaconf.bucketfs_dir, bfs_name)
                     binds.append(bfs_host + ":" + bfs_container + ":rw")
                     volumes.append(bfs_container)
@@ -265,35 +290,36 @@ class docker_handler:
             if my_conf.has_key("exposed_ports"):
                 port_binds = dict(my_conf.exposed_ports)
             # create host config
-            hc = self.client.create_host_config(privileged = True,
+            hc = self.client.create_host_config(privileged = docker_conf.privileged,
+                                                cap_add = docker_conf.cap_add,
+                                                cap_drop = docker_conf.cap_drop,
+                                                network_mode = docker_conf.network_mode,
+                                                auto_remove = auto_remove,
                                                 binds = binds,
                                                 devices = devices,
                                                 port_bindings = port_binds)
             # create config for the first network (see above)
-            ip = ""
-            if first_net['MyScope'] == 'private':
-                ip = my_conf.private_ip
-            elif first_net['MyScope'] == 'public':
-                ip = my_conf.public_ip
-            ep_conf = self.client.create_endpoint_config(**{ip_types[self.exaconf.ip_type(ip)]: ip}) 
-            net_conf = self.client.create_networking_config({first_net['MyName']: ep_conf})
+            if first_net:
+                ip = ""
+                if first_net['MyScope'] == 'private':
+                    ip = my_conf.private_ip
+                elif first_net['MyScope'] == 'public':
+                    ip = my_conf.public_ip
+                ep_conf = self.client.create_endpoint_config(**{ip_types[self.exaconf.ip_type(ip)]: ip}) 
+                net_conf = self.client.create_networking_config({first_net['MyName']: ep_conf})
 
             # 2.) create container
-            if cmd and cmd != "":
-                print "Creating container '%s' with custom command '%s'..." % (container_name, cmd),
-            else:
-                cmd = self.def_container_cmd
-                print "Creating container '%s'..." % container_name,
+            self.log("Creating container '%s'..." % container_name, no_nl=True)
             try:
                 container = self.client.create_container(self.image,
-                                                         hostname = my_conf.hostname,
+                                                         hostname = my_conf.name,
                                                          detach = True,
                                                          stdin_open = True,
                                                          tty = True,
                                                          name = container_name,
                                                          labels = {'ClusterName' : self.cluster_name,
                                                                    'NodeID' : node_id,
-                                                                   'Hostname' : my_conf.hostname},
+                                                                   'Name' : my_conf.name},
                                                          environment = {'EXA_NODE_ID' : node_id},
                                                          volumes = volumes,
                                                          host_config = hc,
@@ -303,7 +329,7 @@ class docker_handler:
                 created_containers.append(container)
                 # add name (not part of the returned dict)
                 container['MyName'] = container_name
-                print "successful"
+                self.log("successful")
                 if self.verbose:
                     print "Created the following container:"
                     pprint.pprint(container)
@@ -313,20 +339,21 @@ class docker_handler:
                 raise DockerError("Failed to create container: %s" % e)
 
             # 3.) attach container to the remaining network(s)
-            for net in networks:
-                ip = ""
-                if net['MyScope'] == 'private':
-                    ip = my_conf.private_ip
-                elif net['MyScope'] == 'public':
-                    ip = my_conf.public_ip
-                print "Connecting container '%s' to network '%s' with IP '%s'..." % (container['MyName'], net['MyName'], ip),
-                try:
-                    self.client.connect_container_to_network(container = container['Id'],
-                                                             net_id = net['Id'],
-                                                             **{ip_types[self.exaconf.ip_type(ip)]: ip})
-                    print "successful"
-                except docker.errors.APIError as e:
-                    raise DockerError("Failed to connect network: %s" % e)
+            if networks:
+                for net in networks:
+                    ip = ""
+                    if net['MyScope'] == 'private':
+                        ip = my_conf.private_ip
+                    elif net['MyScope'] == 'public':
+                        ip = my_conf.public_ip
+                    self.log("Connecting container '%s' to network '%s' with IP '%s'..." % (container['MyName'], net['MyName'], ip), no_nl=True)
+                    try:
+                        self.client.connect_container_to_network(container = container['Id'],
+                                                                 net_id = net['Id'],
+                                                                 **{ip_types[self.exaconf.ip_type(ip)]: ip})
+                        self.log("successful")
+                    except docker.errors.APIError as e:
+                        raise DockerError("Failed to connect network: %s" % e)
 
         return created_containers  
 #}}}
@@ -344,10 +371,10 @@ class docker_handler:
                 print "Going to start the following container:"
                 pprint.pprint(container)
             try:
-                print "Starting container '%s'..." % container['MyName'],
+                self.log("Starting container '%s'..." % container['MyName'], no_nl=True)
                 self.client.start(container=container['Id'])
                 started_containers.append(container)
-                print "successful"
+                self.log("successful")
             except docker.errors.APIError as e:
                 raise DockerError("Failed to start container: %s" % e)
         return started_containers
@@ -362,7 +389,7 @@ class docker_handler:
 
         containers = self.get_containers()
         if len(containers) == 0:
-            print "No containers found for cluster '%s'." % self.cluster_name
+            self.log("No containers found for cluster '%s'." % self.cluster_name)
             return False
 
         # stop them
@@ -377,19 +404,21 @@ class docker_handler:
             if state == 'running' or state == 'paused' or state == 'restarting':
                 num_running += 1
                 try:
-                    print "Stopping container '%s'..." % self.container_name(container),
+                    self.log("Stopping container '%s'..." % self.container_name(container), no_nl=True)
                     self.client.stop(container['Id'], int(timeout))
                     num_stopped += 1
-                    print "successful"
+                    self.log("successful")
                 except docker.errors.APIError as e:
                     print "Failed to stop container '%s': %s" % (self.container_name(container), e)
                     err = True
             else:
                 num_stopped += 1
 
+        if err:
+            raise DockerError("Failed to stop all containers!")    
         if num_running == 0:
-            print "No running containers found for cluster '%s'." % self.cluster_name
-        elif self.verbose and not err:
+            self.log("No running containers found for cluster '%s'." % self.cluster_name)
+        elif self.verbose:
             print "Successfully stopped %i containers." % num_running
 
         return num_stopped > 0
@@ -403,18 +432,23 @@ class docker_handler:
 
         containers = self.get_containers()
         if len(containers) == 0:
-            print "No containers found for cluster '%s'." % self.cluster_name
+            self.log("No containers found for cluster '%s'." % self.cluster_name)
             return False
 
+        err = False
         for container in containers:
             state = container['State']
             if state == 'exited' or state == 'created':
-                print "Removing container '%s'..." % self.container_name(container),
+                self.log("Removing container '%s'..." % self.container_name(container), no_nl=True)
                 try:
                     self.client.remove_container(container['Id'])
-                    print "successful"
+                    self.log("successful")
                 except docker.errors.APIError as e:
                     print "Failed to remove container '%s': %s" % (self.container_name(container), e)
+                    err = True
+
+        if err:
+            raise DockerError("Failed to remove all containers!")
 
         return True
 #}}}
@@ -432,46 +466,88 @@ class docker_handler:
         else:
             return False
 #}}}
+  
+#{{{ Cluster online
+    def cluster_online(self):
+        """ 
+        Checks if containers of this cluster exist AND are currently running.
+        """
+
+        containers = self.get_containers(all=False)
+        if containers and len(containers) > 0:
+            return True
+        else:
+            return False
+#}}}
  
 #{{{ Start cluster
-    def start_cluster(self, cmd=None):
+    def start_cluster(self, cmd=None, auto_remove=False, dummy_mode=False):
         """
         Starts the given cluster by:
             - checking the available free space (in case of file-devices)
-            - copying EXAConf to the docker-volume of all nodes (into 'etc/')
+            - copying EXAConf, license and SSL files to the docker-volume of all nodes (into 'etc/')
             - creating docker networks
             - creating docker containers for all cluster-nodes
             - starting docker containers
+        If 'dummy_mode' is true, all checks and preparations are skipped. Only containers are created 
+        started. This can be used to execute arbitrary commands in the containers (if 'auto_remove'
+        is also true, these containers will be removed by Docker as soon as the container process exits).
         """
-        if self.cluster_started():
-            raise DockerError("Cluster '%s' has already been started! Use 'stop-cluster' if you want to stop it." % self.cluster_name)
-        # 1. check free space in case of file-devices
-        if self.exaconf.get_docker_device_type() == "file":
-            dh = device_handler.device_handler(self.exaconf)
-            if dh.check_free_space() == False:
-                raise DockerError("Check for space usage failed! Aborting startup.")
-        # 2. copy EXAConf and license to all node volumes
-        conf_path = self.exaconf.get_conf_path()
-        license = self.exaconf.get_license_file()
-        node_volumes = self.exaconf.get_docker_node_volumes()
-        print "Copying EXAConf to all node volumes."
-        for n,volume in node_volumes.iteritems():
-            shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
-            shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
-        # 3. create networks
-        try:
-            networks = self.create_networks()
-        except DockerError as e:
-            print "Error during startup! Cleaning up..."
-            self.stop_cluster(30)   
-            raise e
+
+        networks = None
+        if not dummy_mode:
+            # 0. sanity checks
+            if self.cluster_started():
+                raise DockerError("Cluster '%s' has already been started! Use 'stop-cluster' if you want to stop it." % self.cluster_name)
+            docker_conf = self.exaconf.get_docker_conf()
+            conf_img_version = self.exaconf.get_img_version()
+            ic = self.get_image_conf(self.exaconf.get_docker_image())
+            if ic.labels.version != conf_img_version:
+                raise DockerError("EXAConf image version does not match that of the docker image ('%s' vs. '%s')! Please update the cluster before attempting to start it." % (conf_img_version, ic.labels.version))
+
+            # 1. check free space in case of file-devices
+            if self.exaconf.get_docker_device_type() == "file":
+                dh = device_handler.device_handler(self.exaconf)
+                if dh.check_free_space() == False:
+                    raise DockerError("Check for space usage failed! Aborting startup.")
+
+            # 2. copy EXAConf and license to all node volumes
+            conf_path = self.exaconf.get_conf_path()
+            license = self.exaconf.get_license_file()
+            node_volumes = self.exaconf.get_docker_node_volumes()
+            self.log("Copying EXAConf and license to all node volumes.")
+            for n,volume in node_volumes.iteritems():
+                shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
+                shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
+            # 2.1 Copy SSL files (if they exist)
+            try:
+                ssl_conf = self.exaconf.get_ssl_conf()
+                if ssl_conf.has_key("cert") and os.path.isfile(ssl_conf.cert):
+                    shutil.copy(ssl_conf.cert, os.path.join(volume, self.exaconf.ssl_dir))
+                if ssl_conf.has_key("cert_key") and os.path.isfile(ssl_conf.cert_key):
+                    shutil.copy(ssl_conf.cert_key, os.path.join(volume, self.exaconf.ssl_dir))
+                if ssl_conf.has_key("cert_auth") and os.path.isfile(ssl_conf.cert_auth):
+                    shutil.copy(ssl_conf.cert_auth, os.path.join(volume, self.exaconf.ssl_dir))
+            except EXAConf.EXAConfError as e:
+                print "Skipping SSL configuration (not present in EXAConf)."
+
+            # 3. create networks (if network mode is not "host")
+            if docker_conf.network_mode != "host":
+                try:
+                    networks = self.create_networks()
+                except DockerError as e:
+                    print "Error during startup! Cleaning up..."
+                    self.stop_cluster(30)   
+                    raise e
+
         # 4. create containers
         try:
-            containers = self.create_containers(networks, cmd=cmd)
+            containers = self.create_containers(networks, cmd=cmd, auto_remove=auto_remove)
         except DockerError as e:
             print "Error during startup! Cleaning up..."
             self.stop_cluster(30)            
             raise e
+
         # 5. start containers
         try:
             self.start_containers(containers)
@@ -489,7 +565,80 @@ class docker_handler:
             - removing all stopped docker containers
             - removing all docker networks
         """
-        if self.stop_containers(timeout):
-            self.remove_containers()
-        self.delete_networks()
+        ex = None
+        try:
+            stopped = self.stop_containers(timeout)
+        except DockerError as e:
+            print "Error during shutdown! Continueing anyway..."
+            ex = e
+        try:
+            if stopped:
+                self.remove_containers()
+        except DockerError as e:
+            print "Error during shutdown! Continueing anyway..."
+            ex = e
+        try:
+            self.delete_networks()
+        except DockerError as e:
+            ex = e
+
+        if ex:
+            raise ex
+#}}}
+
+#{{{ Execute container
+    def execute_container(self, cmd, container, stdin=False, tty=False):
+        """
+        Executes the given command in the given container.
+        """
+        
+        self.log("=== Executing '%s' on '%s' ===" % (cmd, container['Labels']['Name']))
+        try:
+            exi = self.client.exec_create(container=container, cmd=cmd, stdin=stdin, tty=tty)
+        except docker.errors.APIError as e:
+            raise DockerError("Failed to create exec instance for command '%s': %s" % (cmd, e))
+        try:
+            res = self.client.exec_start(exec_id=exi, tty=False, stream=True)
+        except docker.errors.APIError as e:
+            raise DockerError("Failed to start exec instance for command '%s': %s" % (cmd, e))
+
+        for val in res:
+            self.log(val)
+#}}}
+
+#{{{ Execute
+    def execute(self, cmd, all=False, stdin=False, tty=False):
+        """
+        Executes the given command either on a single (random) running container or all running containers (if 'all' == True).
+        """
+        
+        success = False
+        containers = self.get_containers(all=False)
+        for container in containers:
+            if container['State'] == 'running':
+                self.execute_container(cmd, container, stdin=stdin, tty=tty)
+                success = True
+                if all == False:
+                    break
+
+        if not success:
+            self.log("No running containers found for the given cluster.")
+#}}}
+
+#{{{ Run
+    def run(self, image, cmd=None):
+        """
+        Creates and runs a new container with given image and command (in privileged mode). The container is immediately removed when it exits.
+        """
+
+        # create a simple client for this task
+        try:
+            c = docker.DockerClient()
+            c.containers.run(image, command=cmd, auto_remove=True, privileged=True)
+        except docker.errors.ContainerError as e:
+            raise DockerError("Container with image '%s' and command '%s' exited with error: %s" % (image, cmd if cmd else "None", e))
+        except docker.errors.ImageNotFound as e:
+            raise DockerError("Image '%s' could not be found: %s" % (image, e))
+        except docker.errors.APIError as e:
+            raise DockerError("Error running a container with image '%s' and command '%s': %s" % (image, cmd if cmd else "None", e))
 #}}}

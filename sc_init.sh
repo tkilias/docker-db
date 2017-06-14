@@ -20,4 +20,4 @@ done
 sed -i "s+PrivateNet *= *.*$+PrivateNet = $CURIP+" /exa/etc/EXAConf || echo "FAILED TO WRITE THE NETWORK CONFIGURATION TO EXAConf!"
 rm -f /var/run/ecos_unix_auth
 
-exec /usr/opt/EXASuite-6/EXAClusterOS-6.0.0/libexec/exainit.py
+exec /usr/opt/EXASuite-6/EXAClusterOS-6.0.1/libexec/exainit.py

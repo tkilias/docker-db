@@ -68,10 +68,10 @@ class device_handler:
         # search the device_mapping for the given device
         # --> device-name in mapping may also have suffix!
         if disk_conf.has_key("mapping"):
-            for mdev,m in disk_conf.mapping:
+            for mdev,path in disk_conf.mapping:
                 if mdev.endswith(self.exaconf.data_dev_suffix):
                     mdev = mdev[:-len(self.exaconf.data_dev_suffix)]
-                elif dev.endswith(self.exaconf.meta_dev_suffix):
+                elif mdev.endswith(self.exaconf.meta_dev_suffix):
                     mdev = mdev[:-len(self.exaconf.meta_dev_suffix)]
                 if dev == mdev:
                     return True
@@ -319,7 +319,7 @@ class device_handler:
                 # raise error if path does not exist
                 if not os.path.exists(path):
                     raise DeviceError("'%s' does not exist!" % path)
-                node_path = os.path.join(path.strip(), nodes_conf[node_id].hostname)
+                node_path = os.path.join(path.strip(), nodes_conf[node_id].name)
                 if not os.path.exists(node_path):
                     try:
                         os.makedirs(node_path)

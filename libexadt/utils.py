@@ -1,6 +1,12 @@
 #! /usr/bin/env python2.7
 
-import re, base64, string, random
+import re, base64, string, random, os
+# pwd is only available on UNIX systems
+try:
+    import pwd
+except ImportError:
+    import getpass
+    pwd = None
 
 #{{{ Units to bytes
 
@@ -45,4 +51,38 @@ def gen_base64_passwd(length):
     Generates a base64 encoded password with given length.
     """
     return base64.b64encode(gen_passwd(length))
+#}}}
+
+#{{{ Get effective UID
+def get_euid():
+    """
+    Returns the effective user ID on UNIX systems and a default value on Windows.
+    """
+    if "geteuid" in dir(os):
+        return os.geteuid()
+    else:
+        return 500
+#}}}
+ 
+#{{{ Get effective GID
+def get_egid():
+    """
+    Returns the effective group ID on UNIX systems and a default value on Windows.
+    """
+    if "getegid" in dir(os):
+        return os.getegid()
+    else:
+        return 500
+#}}}
+
+#{{{ Get username
+def get_username():
+    """
+    Returns the (effective) username on UNIX and Windows.
+    """
+    if "geteuid" in dir(os):
+        return pwd.getpwuid(os.geteuid()).pw_name
+    else:
+        return getpass.getuser()
+
 #}}}
