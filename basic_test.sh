@@ -20,7 +20,7 @@ set -x &&
 "$BINARY" start-cluster MyCluster &&
 "$BINARY" ps MyCluster &&
 "$BINARY" exec -c "/bin/date" -a MyCluster &&
-sleep 3
+sleep 12
 "$BINARY" stop-db MyCluster &&
 "$BINARY" start-db MyCluster &&
 "$BINARY" stop-cluster MyCluster &&
