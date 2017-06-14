@@ -106,7 +106,7 @@ def delete_cluster(cmd):
         # interpret exception as "not initialized" and proceed
 
     # delete root-dir if not prevented
-    # NOTE  : this is done by starting new containers and executing 'rm -rf' because 
+    # NOTE  : this is done by starting new containers and executing 'rm -rf /exa' because 
     #         some of the files belong to root (due to the privileged mode) and can't  
     #         be deleted if exadt has been called by a normal user.
     if initialized and not cmd.keep_root:
@@ -117,9 +117,15 @@ def delete_cluster(cmd):
             dh.start_cluster(cmd = "rm -rf /exa", auto_remove=True, dummy_mode=True)
         except docker_handler.DockerError as e:
             print "Errors occured while trying to delete the root directory: %s" % e
+        # delete the root-directory itself and the node directories
+        rmtree(root, True)
     # un-initialized clusters have to be deleted without accessing EXAConf
     elif not cmd.keep_root:
         rmtree(root, True)
+
+    # check if deletion was successfull (may fail if there are root-only files in an unitialized cluster)
+    if os.path.isdir(root):
+        print "WARNING: root directory '%s' could not be completely deleted! Please delete it manually before reusing it." % root
  
     # delete mapped devices if not prevented
     # --> we delete the complete '$name' directories (they are created automatically)
