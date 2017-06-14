@@ -6,8 +6,8 @@ from shutil import rmtree
 from libexadt.EXAConf import config
 
 #import sys
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS.6.0.1/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS.6.0.1/share/exaoperation')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS.Dockerization/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS.Dockerization/share/exaoperation')
 
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
@@ -429,6 +429,10 @@ def update_cluster(cmd):
         root = conf.get_root(cmd.cluster)
     except exadt_conf.ConfError as e:
         print e
+        sys.exit(1)
+    # check if has been started (i. e. containers exist)
+    if cluster_started(root):
+        print "Cluster '%s' has existing containers. It has to be stopped before it can be updated!" % cmd.cluster
         sys.exit(1)
     # extract new versions
     new_db_version, new_os_version, new_img_version = extract_versions(cmd)

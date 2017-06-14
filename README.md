@@ -181,7 +181,7 @@ As stated above, the containers are deleted when a cluster is stopped, but the r
  
 ## 7. Updating a cluster
 
-A cluster can be updated by exchanging the EXASOL Docker image:
+A cluster can be updated by exchanging the EXASOL Docker image (but it has to be stopped first):
 
 ```console
 $ git pull
