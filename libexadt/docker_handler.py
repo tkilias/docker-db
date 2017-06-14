@@ -591,8 +591,16 @@ class docker_handler:
         """
         Executes the given command in the given container.
         """
-        
-        self.log("=== Executing '%s' on '%s' ===" % (cmd, container['Labels']['Name']))
+
+        # Retrieve node name (Label changed in 6.0.1 from "Hostname" to "Name")
+        # or use container name instead
+        node_name = container['Names'][0].lstrip("/")
+        if 'Hostname' in container['Labels']:
+            node_name =  container['Labels']['Hostname']
+        elif 'Name' in container['Labels']:
+            node_name =  container['Labels']['Name']
+                                                              
+        self.log("=== Executing '%s' in container '%s' ===" % (cmd, node_name))
         try:
             exi = self.client.exec_create(container=container, cmd=cmd, stdin=stdin, tty=tty)
         except docker.errors.APIError as e:

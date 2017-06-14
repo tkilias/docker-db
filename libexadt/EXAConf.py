@@ -108,9 +108,9 @@ class EXAConf:
         except configobj.ConfigObjError as e:
             raise EXAConfError("Failed to read '%s': %s" % (self.conf_path, e))
         
-        # validate content if EXAConf is already initialized
+        # update and validate content if EXAConf is already initialized
         # also read current version numbers from config
-        if initialized:
+        if self.initialized():
             self.update_self()
             self.validate()
             self.set_os_version(self.config["Global"]["OSVersion"])
