@@ -14,13 +14,15 @@ Currently supported features:
 
 # How to use this image
 
+**NOTE: Because of a bug in dockerpy 2.3.0 version 2.2.1 is enforced in 'exadt_requirements.txt'**
+
 - Pull the image to your Docker host:
   ```console
   $ docker pull exasol/docker-db:latest
   ```
 - Install the `exadt` dependencies:
   ```console
-  $ pip install --upgrade docker ipaddr ConfigObj
+  $ pip install --upgrade -r exadt_requirements.txt
   ```
 - Install `exadt`:
   ```console
@@ -185,6 +187,7 @@ A cluster can be updated by exchanging the EXASOL Docker image (but it has to be
 
 ```console
 $ git pull
+$ pip install --upgrade -r exadt_requirements.txt
 $ docker pull exasol/docker-db:latest
 $ ./exadt update-cluster --image exasol/docker-db:latest MyCluster
 Cluster 'MyCluster' has been successfully updated!
