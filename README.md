@@ -216,31 +216,39 @@ Note that all file devices (even the mapped ones) and the root directory are del
 
 A cluster has to be stopped before it can be deleted (even if all containers are down)!
 
-# Using the self contained image version
+# Creating a self-contained EXASOL container
 
-The self contained EXASOL docker image does not require `exadt` and no docker volumes need to be mounted. All data is stored within the container and if a container of that image is removed, all data is lost. 
-
-In order to use the self contained image version, execute the following commands:
+Starting with version 6.0.2-d1, you can create a self-contained EXASOL container from the EXASOL docker image using the following command:
 
 ```console
-$ docker pull exasol/docker-db:6.0.0-d1sc
-$ docker run --rm --privileged exasol/docker-db:6.0.0-d1sc
+$ docker run --detach --privileged exasol/docker-db:latest
 ```
 
-In order to build your own self contained image version, use the files from the github repository:
+All data is stored within the container and is lost if the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
+
 ```console
-$ docker build -f sc_dockerfile .
+$ docker run --detach --privileged -v exa_volume:/exa exasol/docker-db:latest
 ```
 
-The file `sc.conf` contains the cluster configuration (`EXAConf`) and `sc_init.sh` contains the initialization steps that are required for a self contained image.
-   
+See [the Docker volumes documentation](https://docs.docker.com/engine/tutorials/dockervolumes/) for more examples on how to create and manage persistent volumes.
+
+**NOTE: Make sure the database has been shut down correctly before stopping the container!**
+
+The database of a self-contained container can be stopped manually by executing the following command within the container:
+
+```console
+$ dwad_client stop-wait DB1
+```
+  
+**NOTE: It is not guaranteed that a persistent volume remains compatible with a later version of the EXASOL Docker image!**
+
 # Supported Docker versions
 
 `exadt` and the EXASOL Docker image have been developed and tested with Docker 17.04.0-ce (API 1.28) and docker-py 2.2.1. It may also work with earlier versions, but that is not guaranteed.
  
+Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
+ 
 # Supported OS
 
 `exadt` currently only supports Docker on Linux (tested with Fedora). If you are using a Windows host you'd have to create a Linux VM.
- 
-Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
  

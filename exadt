@@ -1,18 +1,34 @@
 #! /usr/bin/env python2.7
 
-import sys, os, argparse, pprint
+import sys, os, argparse, pprint, subprocess, time
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, docker_rpc_handler, utils 
-from shutil import rmtree
+import shutil
 from libexadt.EXAConf import config
 
 #import sys
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS.Dockerization/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS.Dockerization/share/exaoperation')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.2/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.2/share/exaoperation')
 
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-#{{{
+#{{{ static variables for the "self contained image"
+sc_owner = 500
+sc_group = 500
+sc_cluster_name = "cl4"
+sc_image = "exasol/docker-db:latest" #not relevant
+sc_num_nodes = 1
+sc_device_type = "file"
+sc_license = "/.license.xml"
+cos_auth_socket = "/var/run/ecos_unix_auth"
+#}}}
+
+#{{{ log_err
+def log_err(msg):
+    sys.stderr.write('[%s] %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg))
+#}}}
+
+#{{{ Confirm
 def confirm(msg):
     """
     Asks the user for confirmation.
@@ -118,10 +134,10 @@ def delete_cluster(cmd):
         except docker_handler.DockerError as e:
             print "Errors occured while trying to delete the root directory: %s" % e
         # delete the root-directory itself and the node directories
-        rmtree(root, True)
+        shutil.rmtree(root, True)
     # un-initialized clusters have to be deleted without accessing EXAConf
     elif not cmd.keep_root:
-        rmtree(root, True)
+        shutil.rmtree(root, True)
 
     # check if deletion was successfull (may fail if there are root-only files in an unitialized cluster)
     if os.path.isdir(root):
@@ -149,7 +165,7 @@ def delete_cluster(cmd):
                             if os.path.isfile(path):
                                 path = os.path.dirname(path)
                             print "Deleting directory '%s'." % path
-                            rmtree(path, True)
+                            shutil.rmtree(path, True)
                         except OSError as e:
                             print "Failed to delete '%s': %s." % (path, e)
 
@@ -241,7 +257,7 @@ def init_cluster(cmd):
             for e in files:
                 name = os.path.join(root, e)
                 if os.path.isdir(name):
-                    rmtree(name, True)
+                    shutil.rmtree(name, True)
                 else:
                     os.unlink(name)
         else:
@@ -256,34 +272,7 @@ def init_cluster(cmd):
     # create directory structure
     for node in range(1, cmd.num_nodes+1):
         node_root = os.path.join(root, exaconf.node_root_prefix + str(exaconf.max_reserved_node_id + node))
-        if not os.path.exists(node_root):
-            os.makedirs(node_root)
-        if not os.path.exists(os.path.join(node_root, exaconf.etc_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.etc_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.ssl_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.ssl_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.md_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.md_storage_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.md_storage_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.md_dwad_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.md_dwad_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.log_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.log_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.logd_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.logd_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.cored_log_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.cored_log_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.db_log_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.db_log_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.data_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.data_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.storage_dir)):
-            os.makedirs(os.path.join(node_root, exaconf.storage_dir))
-        if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs)):
-            os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))
+        create_node_dirs(node_root, exaconf)
     # initialize EXAConf
     exaconf.initialize(cmd.cluster, cmd.image, 
                        cmd.num_nodes, cmd.device_type, cmd.force, "Docker",
@@ -301,6 +290,147 @@ def init_cluster(cmd):
             sys.exit(1)
 
     print "Successfully initialized root directory '%s'." % root
+#}}}
+
+#{{{ Init sc
+def init_sc(cmd):
+    """
+    Called from within the 'self contained' image: creates the container filesystem,
+    storage devices and EXAConf. Finally calls exainit, which continues the startup
+    process.
+    """
+    
+    do_full_init = False
+    # 1. Create /exa/etc if it does not exist
+    # --> needed in order to create an exaconf instance
+    node_root = "/exa"
+    etc_dir = os.path.join(node_root, "etc")
+    if not os.path.exists(etc_dir):
+        log_err("exadt:: '%s' does not exist! Doing full initialization." % etc_dir)
+        do_full_init = True
+        os.makedirs(etc_dir)
+    else:
+        log_err("exadt:: '%s' already exists! Doing partial initialization." % etc_dir)
+
+    # 2. Create EXAConf (may be uninitialized)
+    try:
+        exaconf = EXAConf.EXAConf(etc_dir, False)
+    except EXAConf.EXAConfError as e:
+        log_err(e)
+        sys.exit(1)  
+
+    # 3. Create all other directories if they don't exist
+    create_node_dirs(node_root, exaconf)
+
+    # 4. copy license to the correct destination
+    log_err("exadt:: copying license file '%s' to '%s'" % (sc_license, etc_dir))
+    shutil.copy(sc_license, os.path.join(etc_dir, "license.xml"))
+
+    # 5. Init EXAConf
+    #    NOTE : the version numbers are taken from the default values, 
+    #           the image name is not relevant and the license has already
+    #           been copied to the right place.
+    if not exaconf.initialized():
+        log_err("exadt:: initializing EXAConf")
+        exaconf.initialize(sc_cluster_name, sc_image, 
+                           sc_num_nodes, sc_device_type, 
+                           False, "Docker",
+                           license = "/exa/etc/license.xml",
+                           add_archive_volume=False)
+
+    # 6. set correct IP address
+    log_err("exadt:: searching for the first interface with state UP")
+    local_if = utils.get_first_interface(15)
+    try:
+        exaconf.set_node_network(11, private=local_if[1])
+    except EXAConf.EXAConfError as e:
+        log_err(e)
+        sys.exit(1)
+    log_err("exadt:: using interface '%s' with address '%s'." % (local_if[0], local_if[1]))
+
+    # 7. create storage devices
+    if do_full_init:
+        log_err("exadt:: creating EXAStorage devices")
+        try:
+            devh = device_handler.device_handler(exaconf)
+            devh.auto_create_file_devices(container_internal=True)
+        except device_handler.DeviceError as e:
+            log_err(e)
+            sys.exit(1)
+
+    # 8. change DB, volume and service owner
+    log_err("exadt:: changing DB, volume and BucketFS owner to %i : %i" % (sc_owner, sc_group))
+    try:
+        conf = config()
+        conf.owner = (sc_owner, sc_group)
+        exaconf.set_storage_volume_conf(conf)
+        exaconf.set_database_conf(conf)
+        bfs_conf = config()
+        bfs_conf.service_owner = (sc_owner, sc_group)
+        exaconf.set_bucketfs_conf(bfs_conf)
+    except EXAConf.EXAConfError as e:
+        log_err(e)
+        sys.exit(1)
+ 
+    # 9. change owner and group of all files and directories below "/exa"
+    for root, dirs, files in os.walk(node_root):
+        os.lchown(root, sc_owner, sc_group)
+        for d in dirs:
+            os.lchown(os.path.join(root, d), sc_owner, sc_group)
+        for f in files:
+            os.lchown(os.path.join(root, f), sc_owner, sc_group)
+
+    # 10. set and export hostname
+    hostname = "n11"
+    log_err("exadt:: setting hostname to '%s'" % hostname)
+    os.environ['EXA_NODE_ID'] = "11"
+    os.environ['HOSTNAME'] = hostname
+    subprocess.call(['/bin/hostname', hostname])
+
+    # 11. remove authentication socket if it exists
+    if os.path.exists(cos_auth_socket):
+        log_err("exadt:: removing '%s'" % cos_auth_socket)
+        os.remove(cos_auth_socket)
+
+    # 12. call exainit
+    exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.2/libexec/exainit.py'
+    log_err("exadt:: calling '%s'" % exainit_cmd)
+    os.execl(exainit_cmd, exainit_cmd)
+#}}}
+
+#{{{ Create node dirs
+def create_node_dirs(node_root, exaconf):
+    """
+    Creates all default directories in the given node root directory.
+    """
+    if not os.path.exists(node_root):
+        os.makedirs(node_root)
+    if not os.path.exists(os.path.join(node_root, exaconf.etc_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.etc_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.ssl_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.ssl_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.md_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.md_storage_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.md_storage_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.md_dwad_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.md_dwad_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.log_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.log_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.logd_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.logd_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.cored_log_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.cored_log_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.db_log_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.db_log_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.data_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.data_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.storage_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.storage_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs)):
+        os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))   
 #}}}
 
 #{{{ List clusters
@@ -586,7 +716,7 @@ def execute(cmd):
     try:
         dh = docker_handler.docker_handler()
         dh.set_exaconf(exaconf)
-        dh.execute(cmd.command, all=cmd.all)
+        dh.execute(cmd.command, all=cmd.all, quiet=cmd.quiet)
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)
@@ -722,7 +852,13 @@ def main():
             action = 'store_true',
             help='force re-initialization of the root directory (if not empty)')
     parser_ic.set_defaults(func=init_cluster)
-   
+  
+    # init self-contained command
+    parser_ic = cmdparser.add_parser(
+            'init-sc',
+            help='initialize the container of a self-contained image') 
+    parser_ic.set_defaults(func=init_sc)
+
     # list clusters command
     parser_lc = cmdparser.add_parser(
             'list-clusters',
@@ -763,7 +899,7 @@ def main():
             help='name of the cluster to be started')
     parser_sc.add_argument(
             '--command', '-c',
-            help='custom start command for all containers (useful for debugging)')
+            help="custom start command for all containers (set as 'entrypoint')")
     parser_sc.add_argument(
             '--verbose', '-V',
             action = 'store_true',
@@ -779,8 +915,8 @@ def main():
             help='name of the cluster to be stopped')
     parser_stc.add_argument(
             '--timeout', '-t',
-            default=30,
-            help='seconds to wait for a container to stop before sending SIGKILL (default: 30s)')
+            default=60,
+            help='seconds to wait for a container to stop before sending SIGKILL (default: 60s)')
     parser_stc.add_argument(
             '--verbose', '-V',
             action = 'store_true',
@@ -852,6 +988,11 @@ def main():
             '--all', '-a',
             action='store_true',
             help='execute the given command on all running containers')
+    parser_ex.add_argument(
+            '--quiet', '-q',
+            action='store_true',
+            default=False,
+            help='suppress all output, except from the given command')
     parser_ex.set_defaults(func=execute)
      
     # start-db command

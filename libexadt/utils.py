@@ -1,6 +1,6 @@
 #! /usr/bin/env python2.7
 
-import re, base64, string, random, os
+import re, base64, string, random, os, subprocess, time
 # pwd is only available on UNIX systems
 try:
     import pwd
@@ -85,4 +85,31 @@ def get_username():
     else:
         return getpass.getuser()
 
+#}}}
+
+#{{{ Get first interface
+def get_first_interface(timeout=1):
+    """
+    Returns the name and network address of the first interface that is in state UP. 
+    Retries until an interface is found or the given time (in seconds) has elapsed.
+    """
+    iface = 'N/A'
+    address = 'N/A'
+    found_if_up = False
+    time_elapsed = 0
+    while found_if_up == False and time_elapsed < timeout:       
+        output = subprocess.check_output(['/usr/bin/env', 'ip', 'addr'])
+        for line in output.splitlines():
+            line = line.strip()
+            # found an interface that is UP
+            if 'state UP' in line:
+                found_if_up = True
+                iface = line.split(':')[1].strip()
+            # get its inet address (usually 3 lines down)
+            if 'inet' in line and found_if_up == True:
+                address = line.split(' ')[1].strip()
+                return (iface, address)
+        # no interface is UP yet
+        time.sleep(1)
+        time_elapsed += 1
 #}}}

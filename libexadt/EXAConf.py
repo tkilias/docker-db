@@ -54,7 +54,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.1"
+        self.version = "6.0.2"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -166,8 +166,9 @@ class EXAConf:
                         node_sec = self.config[section]
                         node_sec["Name"] = node_sec["Hostname"]
                         del node_sec["Hostname"]
-                self.config["Global"]["ConfVersion"] = self.version
-                self.commit()
+            # always increase version number
+            self.config["Global"]["ConfVersion"] = self.version
+            self.commit()
 #}}}
 
 #{{{ Check img comapt
@@ -328,9 +329,10 @@ class EXAConf:
         return "Global" in self.config.sections
 #}}}
 
-#{{{ Initialize a configuration
+#{{{ Initialize 
     def initialize(self, name, image, num_nodes, device_type, force, platform, 
-                   db_version=None, os_version=None, img_version=None, license=None):
+                   db_version=None, os_version=None, img_version=None, license=None,
+                   add_archive_volume=True):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
@@ -443,30 +445,34 @@ class EXAConf:
         data_vol_sec.comments["Redundancy"] = ["Desired redundancy for this volume"]
         data_vol_sec.comments["Owner"] = ["Volume owner (user and group ID)"]
         data_vol_sec.comments["Labels"] = ["OPTIONAL: a comma-separated list of labels for this volume"]
-        # archive volume
-        self.config["EXAVolume : ArchiveVolume1"] = {}
-        archive_vol_sec = self.config["EXAVolume : ArchiveVolume1"]
-        archive_vol_sec["Type"] = "archive"
-        archive_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
-        archive_vol_sec["Disk"] = ""
-        archive_vol_sec["Size"] = ""
-        archive_vol_sec["Redundancy"] = "1"
-        archive_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
-        archive_vol_sec["Labels"] = ""
-        #comments
-        self.config.comments["EXAVolume : ArchiveVolume1"] = ["\n", "An EXAStorage archive volume"]
+        # archive volume        
+        if add_archive_volume == True:
+            self.config["EXAVolume : ArchiveVolume1"] = {}
+            archive_vol_sec = self.config["EXAVolume : ArchiveVolume1"]
+            archive_vol_sec["Type"] = "archive"
+            archive_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
+            archive_vol_sec["Disk"] = ""
+            archive_vol_sec["Size"] = ""
+            archive_vol_sec["Redundancy"] = "1"
+            archive_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
+            archive_vol_sec["Labels"] = ""
+            #comments
+            self.config.comments["EXAVolume : ArchiveVolume1"] = ["\n", "An EXAStorage archive volume"]
  
         # DB sections
         self.config["DB : DB1"] = {}
         db_sec = self.config["DB : DB1"] 
         db_sec["DataVolume"] = "DataVolume1"
-        db_sec["ArchiveVolume"] = "ArchiveVolume1"
+        if add_archive_volume == True:
+            db_sec["ArchiveVolume"] = "ArchiveVolume1"
+        else:
+            db_sec["ArchiveVolume"] = ""
         db_sec["Version"] = str(self.db_version)
         db_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
-        db_sec["MemSize"] = '2 GiB'
+        db_sec["MemSize"] = '%s GiB' % str(self.get_num_nodes() * 2) # 2 GiB per node
         db_sec["Port"] = str(self.def_db_port)
-        db_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
-        db_sec["NumMasterNodes"] = str(len(self.get_nodes_conf().keys()))
+        db_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().iterkeys() ] # list is correctly converted by ConfigObj
+        db_sec["NumMasterNodes"] = str(self.get_num_nodes())
         # comments
         self.config.comments["DB : DB1"] = ["\n", "An EXASOL database"]
         db_sec.comments["Version"] = ["The EXASOL version to be used for this database"]
@@ -761,7 +767,7 @@ class EXAConf:
 #}}}
   
 #{{{ Use disk for volumes
-    def use_disk_for_volumes(self, disk, bytes_per_node, vol_type=None):
+    def use_disk_for_volumes(self, disk, bytes_per_node, vol_type=None, min_vol_size = None, vol_resize_step=None):
         """
         Adds the given disk to all volumes of the given type that don't have a disk assigned yet.         
         The given 'bytes_per_node' space is distributed equally across all suitable volumes.
@@ -777,11 +783,97 @@ class EXAConf:
         for volume in volumes.iteritems():
             vol_sec = self.config["EXAVolume : " + volume[0]]
             vol_sec["Disk"] = disk
-            vol_sec["Size"] = bytes2units(bytes_per_volume_node / volume[1].redundancy)
+            # decrease volume size to the next multiple of the vol_resize_step (if given)
+            if vol_resize_step and vol_resize_step > 0:
+                vol_size = bytes2units((vol_resize_step * (bytes_per_volume_node // vol_resize_step)) / volume[1].redundancy)
+                if units2bytes(vol_size) < vol_resize_step:
+                    vol_size = bytes2units(vol_resize_step)
+            else:
+                vol_size = bytes2units(bytes_per_volume_node / volume[1].redundancy)
+            # check size if given
+            if min_vol_size and units2bytes(vol_size) < min_vol_size:
+                raise EXAConfError("Can't assign disk to volume because resulting size '%s' is below min. size %s!" % (vol_size, bytes2units(min_vol_size)))
+            vol_sec["Size"] = vol_size
 
         self.commit()
 #}}}
 
+#{{{ Set node network
+    def set_node_network(self, node_id, private=None, public=None):
+        """
+        Sets the private and / or public network of the given node. 
+        """
+
+        node_section = "Node : " + str(node_id)
+        if node_section not in self.config.sections:
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_sec = self.config[node_section]
+
+        if private and private != "":
+            if not self.net_is_valid(private):
+                raise EXAConfError("Private network '%s' is invalid!" % private)
+            node_sec["PrivateNet"] = private
+        if public and public != "":
+            if not self.net_is_valid(public):
+                raise EXAConfError("Public network '%s' is invalid!" % public)
+            node_sec["PublicNet"] = public
+
+        self.commit()
+#}}}
+
+#{{{ Set storage volume conf
+    def set_storage_volume_conf(self, config, volume="all"):
+        """
+        Changes the values of the given keys for the given volumes
+        (or all volumes).
+        """
+
+        filters = {}
+        if volume != "all":
+            filters["name"] = volume
+        volumes = self.get_storage_volumes(filters=filters)
+
+        for vol in volumes.iteritems():
+            vol_sec = self.config["EXAVolume : " + vol[0]]
+            if "owner" in config.iterkeys():
+                vol_sec["Owner"] = str(config.owner[0]) + " : " + str(config.owner[1])
+
+        self.commit()
+#}}}
+ 
+#{{{ Set database conf
+    def set_database_conf(self, config, database="all"):
+        """
+        Changes the values of the given keys for the given databases
+        (or all databases).
+        """
+
+        filters = {}
+        if database != "all":
+            filters["name"] = database
+        dbs = self.get_databases(filters=filters)
+
+        for db in dbs.iteritems():
+            db_sec = self.config["DB : " + db[0]]
+            if "owner" in config.iterkeys():
+                db_sec["Owner"] = str(config.owner[0]) + " : " + str(config.owner[1])
+
+        self.commit()
+#}}}
+
+#{{{ Set BucketFS conf
+    def set_bucketfs_conf(self, config):
+        """
+        Changes the values of the given keys in the BucketFS section.
+        """
+
+        bfs_sec = self.config["BucketFS"]
+        if "service_owner" in config.iterkeys():
+            bfs_sec["ServiceOwner"] = str(config.service_owner[0]) + " : " + str(config.service_owner[1])
+
+        self.commit()
+#}}}
+          
 ############################## GETTER #################################
  
 #{{{ Get section ID 

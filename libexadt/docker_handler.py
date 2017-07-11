@@ -321,11 +321,12 @@ class docker_handler:
                                                                    'NodeID' : node_id,
                                                                    'Name' : my_conf.name},
                                                          environment = {'EXA_NODE_ID' : node_id},
+                                                         stop_timeout = 60,
                                                          volumes = volumes,
                                                          host_config = hc,
                                                          networking_config = net_conf,
                                                          ports = port_binds.keys(),
-                                                         command = cmd)
+                                                         entrypoint = cmd)
                 created_containers.append(container)
                 # add name (not part of the returned dict)
                 container['MyName'] = container_name
@@ -587,7 +588,7 @@ class docker_handler:
 #}}}
 
 #{{{ Execute container
-    def execute_container(self, cmd, container, stdin=False, tty=False):
+    def execute_container(self, cmd, container, stdin=False, tty=False, quiet=False):
         """
         Executes the given command in the given container.
         """
@@ -600,7 +601,9 @@ class docker_handler:
         elif 'Name' in container['Labels']:
             node_name =  container['Labels']['Name']
                                                               
-        self.log("=== Executing '%s' in container '%s' ===" % (cmd, node_name))
+        # This local 'quiet' only suppresses the additional output, not the one from the command (like 'self.quiet')!
+        if not quiet:
+            self.log("=== Executing '%s' in container '%s' ===" % (cmd, node_name))
         try:
             exi = self.client.exec_create(container=container, cmd=cmd, stdin=stdin, tty=tty)
         except docker.errors.APIError as e:
@@ -615,7 +618,7 @@ class docker_handler:
 #}}}
 
 #{{{ Execute
-    def execute(self, cmd, all=False, stdin=False, tty=False):
+    def execute(self, cmd, all=False, stdin=False, tty=False, quiet=False):
         """
         Executes the given command either on a single (random) running container or all running containers (if 'all' == True).
         """
@@ -624,7 +627,7 @@ class docker_handler:
         containers = self.get_containers(all=False)
         for container in containers:
             if container['State'] == 'running':
-                self.execute_container(cmd, container, stdin=stdin, tty=tty)
+                self.execute_container(cmd, container, stdin=stdin, tty=tty, quiet=quiet)
                 success = True
                 if all == False:
                     break
