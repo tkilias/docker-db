@@ -224,7 +224,7 @@ Starting with version 6.0.2-d1, there is no more separate "self-contained" image
 $ docker run --detach --privileged --stop-timeout 120 exasol/docker-db:latest
 ```
 
-All data is stored within the container and is lost if the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
+All data is stored within the container and lost when the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
 
 ```console
 $ docker run --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:latest
@@ -239,8 +239,6 @@ A high stop-timeout (see example above) increases the chance that the DB can be 
 ```console
 $ dwad_client stop-wait DB1
 ```
-  
-**NOTE: It is not guaranteed that a persistent volume remains compatible with a later version of the EXASOL Docker image!**
 
 # Supported Docker versions
 
