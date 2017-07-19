@@ -240,6 +240,8 @@ A high stop-timeout (see example above) increases the chance that the DB can be 
 $ dwad_client stop-wait DB1
 ```
 
+**NOTE: Currently, a persistent Docker volume is only usable by the EXASOL image it has been created with (i. e. upgrading is not supported)!**
+
 # Supported Docker versions
 
 `exadt` and the EXASOL Docker image have been developed and tested with Docker 17.04.0-ce (API 1.28) and docker-py 2.2.1. It may also work with earlier versions, but that is not guaranteed.
