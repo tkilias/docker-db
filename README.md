@@ -216,25 +216,25 @@ Note that all file devices (even the mapped ones) and the root directory are del
 
 A cluster has to be stopped before it can be deleted (even if all containers are down)!
 
-# Creating a self-contained EXASOL container
+# Manually creating an EXASOL container
 
-Starting with version 6.0.2-d1, you can create a self-contained EXASOL container from the EXASOL docker image using the following command:
+Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an EXASOL container from the EXASOL docker image using the following command::
 
 ```console
-$ docker run --detach --privileged exasol/docker-db:latest
+$ docker run --detach --privileged --stop-timeout 120 exasol/docker-db:latest
 ```
 
 All data is stored within the container and is lost if the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
 
 ```console
-$ docker run --detach --privileged -v exa_volume:/exa exasol/docker-db:latest
+$ docker run --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:latest
 ```
 
 See [the Docker volumes documentation](https://docs.docker.com/engine/tutorials/dockervolumes/) for more examples on how to create and manage persistent volumes.
 
 **NOTE: Make sure the database has been shut down correctly before stopping the container!**
 
-The database of a self-contained container can be stopped manually by executing the following command within the container:
+A high stop-timeout (see example above) increases the chance that the DB can be shut down gracefully before the container is stopped, but it's not guaranteed. However, it can be stopped manually by executing the following command within the container:
 
 ```console
 $ dwad_client stop-wait DB1
