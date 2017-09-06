@@ -22,7 +22,7 @@ class device_handler:
     def __init__(self, ec):
         self.exaconf = ec
         self.min_auto_free_space = (1024 * 1024 * 1024 * 10)
-        self.max_auto_used_space = self.min_auto_free_space * 10
+        self.max_auto_used_space = self.min_auto_free_space * 5
         self.max_auto_internal_used_space = (1024 * 1024 * 1024 * 6)
         # we reserve 2GiB per container, because docker may need this space 
         # if the containers are created on the same partition

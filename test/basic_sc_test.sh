@@ -6,7 +6,7 @@ if (( $# > 0 )); then
 fi
 VOLUME="exa_basic_sc_test_volume"
  
-function wait_start () {
+wait_start() {
     echo -n "Waiting for container $1 to start... "
     while [[ -z $(docker logs "$1" 2>&1 | grep -e ".*Started.*exasql .*") ]]
     do

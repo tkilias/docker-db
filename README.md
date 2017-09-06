@@ -63,7 +63,7 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the type of EXAStorage devices (currently only 'file' is supported)
 
 ```console
-$ ./exadt init-cluster --image exasol/docker-db:latest --license ./license.xml --device-type file --auto-storage MyCluster
+$ ./exadt init-cluster --image exasol/docker-db:latest --license ./license.xml --auto-storage MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```
@@ -90,7 +90,7 @@ Successfully created the following file devices:
 Node 11 : ['/home/user/MyCluster/n11/data/storage/dev.1']
 ```
 
-This example creates two devices per container, but a single device is sufficient. As you can see, the file devices are created within the `data/storage` subdirectory of each node's Docker root. They are created as *sparse files*, i. e. their size is stated as the given size but they actually have size 0 and grow as new data is being written.
+As you can see, the file devices are created within the `data/storage` subdirectory of each node's Docker root. They are created as *sparse files*, i. e. their size is stated as the given size but they actually have size 0 and grow as new data is being written.
 
 All devices must be assigned to a 'disk'. A disk is a group of devices that can be assigned to an EXAStorage volume. The disk name can be specified with the `--disk` parameter. If omitted, the newly created devices will be assigned to the disk named 'default'.
 
@@ -218,10 +218,10 @@ A cluster has to be stopped before it can be deleted (even if all containers are
 
 # Manually creating an EXASOL container
 
-Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an EXASOL container from the EXASOL docker image using the following command::
+Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an EXASOL container from the EXASOL docker image using the following command:
 
 ```console
-$ docker run --detach --privileged --stop-timeout 120 exasol/docker-db:latest
+$ docker run --detach --privileged --stop-timeout 120  exasol/docker-db:latest
 ```
 
 All data is stored within the container and lost when the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
@@ -240,11 +240,46 @@ A high stop-timeout (see example above) increases the chance that the DB can be 
 $ dwad_client stop-wait DB1
 ```
 
-**NOTE: Currently, a persistent Docker volume is only usable by the EXASOL image it has been created with (i. e. upgrading is not supported)!**
+## Updating the persistent volume of a manually created container
+
+Starting with version 6.0.3-d1, an existing persistent volume can be updated (for use with a later version of an EXASOL image) by calling the following command with the *new* image:
+
+```console
+$ docker run -v exa_volume:/exa exasol/docker-db:6.0.3-d1 update-sc
+```
+
+If everything works correctly, you should see output similar to this:
+
+```console
+Updating EXAConf '/exa/etc/EXAConf' from version '6.0.2' to '6.0.3'
+Container has been successfully updated!
+- Image ver. :  6.0.2-d1 --> 6.0.3-d1
+- DB ver.    :  6.0.2 --> 6.0.3
+- OS ver.    :  6.0.2 --> 6.0.3
+```
+
+After that, a new container can be created (from the new image) using the old / updated volume.
+
+# Reporting bugs
+
+Please report bugs that are specifically related to the **dockerized** EXASOL DB at [Github](https://github.com/EXASOL/docker-db/issues).
+
+If you are using `exadt`, then simply add the archive created by `exadt collect-info <ClusterName>` to your bug report. If you created a container with `docker run`,
+then the following information could be helpful:
+
+* your Docker version (the output of `docker version`)
+* the output of `docker logs` and `docker inspect` (of container and image)
+* the content of `/exa/logs` and `/exa/etc` from within the container
+
+Also try to answer the following questions in your bug report:
+
+* What were you doing before the error occured?
+* What did you expect to happen?
+* What actually happened?
 
 # Supported Docker versions
 
-`exadt` and the EXASOL Docker image have been developed and tested with Docker 17.04.0-ce (API 1.28) and docker-py 2.2.1. It may also work with earlier versions, but that is not guaranteed.
+`exadt` and the EXASOL Docker image have been developed and tested with Docker 17.05.0-ce (API 1.29) and docker-py 2.2.1. It may also work with earlier versions, but that is not guaranteed.
  
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
  

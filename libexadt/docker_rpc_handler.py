@@ -39,7 +39,7 @@ class docker_rpc_handler(rpc_handler.rpc_handler):
             return False
         
         for db in db_configs.iterkeys():
-            self.dh.execute("dwad_client stop-wait %s" % db)
+            self.dh.execute("dwad_client stop-wait %s" % db, quiet=True)
         return True
 #}}}
  
@@ -62,8 +62,20 @@ class docker_rpc_handler(rpc_handler.rpc_handler):
             return False
         
         for db in db_configs.iterkeys():
-            self.dh.execute("dwad_client start-wait %s" % db)
+            self.dh.execute("dwad_client start-wait %s" % db, quiet=True)
         return True
 #}}}
          
+#{{{ List databases
+    def list_databases(self, short=False):
+        """
+        Lists all existing databases.
+        """
+
+        if short == True:
+            self.dh.execute("dwad_client shortlist", quiet=True)
+        else:
+            self.dh.execute("dwad_client list", quiet=True)
+        return True
+#}}}
 

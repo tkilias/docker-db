@@ -54,7 +54,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.2"
+        self.version = "6.0.3"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -77,6 +77,7 @@ class EXAConf:
         self.logd_dir = "logs/logd"
         self.cored_log_dir = "logs/cored"
         self.db_log_dir = "logs/db"
+        self.docker_log_dir = "logs/docker"
         self.node_uuid = "etc/node_uuid"
         self.supported_platforms = ['Docker', 'VM']
         self.def_bucketfs = "bfsdefault"
@@ -86,6 +87,8 @@ class EXAConf:
         self.def_bucketfs_https_port = 0
         self.def_docker_privileged = True
         self.def_docker_network_mode = "bridge"
+        self.docker_logs_filename = "docker_logs"
+        self.docker_max_logs_copies = 9
         # set root to container_root if omitted
         # --> only true when called from within the container
         if not root:
@@ -125,6 +128,7 @@ class EXAConf:
         """
         Compares the given version numbers (in format "X.X.X" or "X.X.X-dY") and returns
         -1, 0 or 1 if first is found to be lower, equal or higher than second.
+        NOTE : the '-dX' suffix is ignored!
         """
         
         first = first.strip()
@@ -145,7 +149,7 @@ class EXAConf:
     def update_self(self):
         """
         Checks if the EXAConf version stored in the file is older than the current one and
-        updates options and section names and values is necessary.
+        updates options, section names and values if necessary.
         """
         conf_version = self.config["Global"]["ConfVersion"]
         diff = self.compare_versions(self.version, conf_version)
@@ -174,15 +178,42 @@ class EXAConf:
 #{{{ Check img comapt
     def check_img_compat(self):
         """
-        Checks if the EXAConf version and image version are identical. This has to be the case,
-        because there is also an EXAConf within the image and it could cause problems if they
-        had different versions.
+        Checks if the version of the current EXAConf module and the image version stored in the given EXAConf file are identical. 
+        If this is not the case, then the given EXAConf file has been created with a different docker image and may not be 
+        compatible (i. e. an upgrade is needed).
         """        
         img_version = self.get_img_version()
         if self.compare_versions(self.version, img_version) == 0:
             return (True, self.version, img_version)
         else:
             return (False, self.version, img_version)
+#}}}
+
+#{{{ Check update needed
+    def check_update_needed(self, img_version=None, db_version=None, os_version=None):
+        """
+        Checks if the current EXAConf file contains image, db or os versions that are different from the given
+        ones (i. e. the installation needs to be updated).
+        """
+        res = ""
+        need_update = False
+        if img_version:
+            conf_img_version = self.get_img_version()
+            if self.compare_versions(conf_img_version, img_version) != 0:
+                res += "- image version: %s vs. %s\n" % (conf_img_version, img_version)
+                need_update = True
+        if db_version:
+            conf_db_version = self.get_db_version()
+            if self.compare_versions(conf_db_version, db_version) != 0:
+                res += "- db version: %s vs. %s\n" % (conf_db_version, db_version)
+                need_update = True
+        if os_version:
+            conf_os_version = self.get_os_version()
+            if self.compare_versions(conf_os_version, os_version) != 0:
+                res += "- os version: %s vs. %s\n" % (conf_os_version, os_version)
+                need_update = True
+
+        return (need_update, res)
 #}}}
 
 #{{{ Set OS version
@@ -774,7 +805,7 @@ class EXAConf:
         """
 
         # we only consider volumes without disks
-        filters = {"disk": ""}
+        filters = {"disk": None}
         if vol_type and vol_type != "":
             filters["type"] = vol_type
         volumes = self.get_storage_volumes(filters=filters)
@@ -1132,10 +1163,10 @@ class EXAConf:
                 conf.type = vol_sec["Type"].strip()
                 # data or archive volume
                 if conf.type == "data" or conf.type == "archive":
-                    conf.disk = vol_sec["Disk"].strip()
+                    conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else -1
+                    conf.disk = vol_sec["Disk"].strip() if vol_sec["Disk"].strip() != "" else None
                     conf.redundancy = vol_sec.as_int("Redundancy")
                     conf.nodes = [ int(n.strip()) for n in vol_sec["Nodes"].split(",") if n.strip() != "" ]
-                    conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else -1
                     conf.owner = tuple([ int(x.strip()) for x in vol_sec["Owner"].split(":") if x.strip() != "" ])
                     # optional values
                     if "NumMasterNodes" in vol_sec.scalars:

@@ -1,6 +1,7 @@
 import os,docker,EXAConf,pprint,shutil,device_handler
 from docker.utils import kwargs_from_env
 from libexadt.EXAConf import config
+from libexadt.utils import rotate_file
 
 ip_types = { 4: 'ipv4_address', 6: 'ipv6_address' }
  
@@ -56,7 +57,36 @@ class docker_handler:
         try:
             res = self.client.version()
         except docker.errors.APIError as e:
-            raise DockerError("Failed to query docker version: %s" % (self.cluster_name, e))
+            raise DockerError("Failed to query docker version: %s" % e)
+        return res
+#}}}
+
+#{{{ Inspect image
+    def inspect_image(self, image):
+        """
+        Returns the raw output of 'inspect_image()'.
+        """
+        try:
+            res = self.client.inspect_image(image)
+        except docker.errors.APIError as e:
+            raise DockerError("Failed to inspect image '%s': %s" % (image, e))
+        return res
+#}}}
+
+#{{{ Inspect containers
+    def inspect_containers(self):
+        """
+        Returns the concatenated raw output of 'inspect_container()".
+        """
+
+        res = {}
+        containers = self.get_containers(all=True)
+        for container in containers:
+            try:
+                ci = self.client.inspect_container(container)
+            except docker.errors.APIError as e:
+                raise DockerError("Failed to inspect container '%s' : '%s'" % (self.container_name(container), e))
+            res[self.container_name(container)] = ci
         return res
 #}}}
 
@@ -172,7 +202,19 @@ class docker_handler:
         """
         return container['Names'][0].lstrip("/")
 #}}}
-
+  
+#{{{ Container path
+    def container_path(self, container):
+        """
+        Extracts the path of the container on the host (i. e. the directory that is mounted to '/exa').
+        """
+        host_path = None
+        for mount in container['Mounts']:
+            if mount['Destination'] == self.exaconf.container_root:
+                host_path = mount['Source']
+        return host_path
+#}}}
+ 
 #{{{ Get containers
     def get_containers(self, all=True):
         """ 
@@ -453,7 +495,7 @@ class docker_handler:
 
         return True
 #}}}
- 
+
 #{{{ Cluster started
     def cluster_started(self):
         """ 
@@ -569,9 +611,11 @@ class docker_handler:
         ex = None
         try:
             stopped = self.stop_containers(timeout)
-        except DockerError as e:
-            print "Error during shutdown! Continueing anyway..."
+        except Exception as e:
+            print "Error during shutdown: %s! Continueing anyway..." % e
             ex = e
+        # save logs before removing containers
+        self.save_logs()
         try:
             if stopped:
                 self.remove_containers()
@@ -586,7 +630,28 @@ class docker_handler:
         if ex:
             raise ex
 #}}}
-
+ 
+#{{{ Save logs
+    def save_logs(self):
+        """
+        Stores the output of 'docker logs' within '/exa/logs/docker/'.
+        """
+        containers = self.get_containers(all = True)
+        for container in containers:
+            host_path = self.container_path(container)
+            if host_path:
+                try:
+                    logs = self.client.logs(container, stderr=True, stdout=True, timestamps=False)
+                    current_file = os.path.join(host_path, self.exaconf.docker_log_dir, self.exaconf.docker_logs_filename)
+                    rotate_file(current_file, self.exaconf.docker_max_logs_copies)
+                    with open(current_file, "w") as current_logs:
+                        current_logs.write(logs)
+                except docker.errors.APIError as e:
+                    print "Failed to retrieve docker logs from container '%s' : %s" % (self.container_name(container), e)
+                except IOError as e:
+                    print "Failed to write docker logs to '%s': %s" % (current_file, e)
+#}}}
+ 
 #{{{ Execute container
     def execute_container(self, cmd, container, stdin=False, tty=False, quiet=False):
         """

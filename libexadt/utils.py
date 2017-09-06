@@ -1,6 +1,6 @@
 #! /usr/bin/env python2.7
 
-import re, base64, string, random, os, subprocess, time
+import re, base64, string, random, os, subprocess, time, shutil, hashlib
 # pwd is only available on UNIX systems
 try:
     import pwd
@@ -112,4 +112,32 @@ def get_first_interface(timeout=1):
         # no interface is UP yet
         time.sleep(1)
         time_elapsed += 1
+#}}}
+ 
+#{{{ Rotate file
+def rotate_file(current, max_copies):
+    previous = current + r'.%d'
+    for fnum in range(max_copies - 1, -1, -1):
+        if os.path.exists(previous % fnum):
+            try:
+                os.rename(previous % fnum, previous % (fnum + 1))
+                # Windows-workaround if "previous" exists
+            except OSError:
+                os.remove(previous % (fnum + 1))
+                os.rename(previous % fnum, previous % (fnum + 1))
+    if os.path.exists(current):
+        shutil.copy(current, previous % 0)
+#}}}
+
+#{{{ MD5
+def md5(filename):
+    """
+    Returns the MD5 sum of the given file.
+    """
+
+    md5sum = hashlib.md5()
+    with open(filename, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            md5sum.update(chunk)
+    return md5sum.hexdigest()
 #}}}
