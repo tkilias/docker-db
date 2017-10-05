@@ -15,21 +15,21 @@ RUN yum update -y --exclude=kernel* && \
     yum clean all
 
 LABEL name="EXASOL DB Docker Image"  \
-      version="6.0.3-d1" \
-      dbversion="6.0.3" \
-      osversion="6.0.3" \
-      reversion="6.0.3" \
+      version="6.0.4-d1" \
+      dbversion="6.0.4" \
+      osversion="6.0.4" \
+      reversion="6.0.4" \
       license="Proprietary" \
       vendor="EXASOL AG"
 
 
 COPY license/license.xml     /.license.xml
-ADD EXAClusterOS-6.0.3_LS-DOCKER-CentOS-6.8_x86_64.tar.gz              /
-ENV PATH=/usr/opt/EXASuite-6/EXAClusterOS-6.0.3/bin:/usr/opt/EXASuite-6/EXAClusterOS-6.0.3/sbin:/usr/opt/EXASuite-6/EXARuntime-6.0.3/bin:/usr/opt/EXASuite-6/EXARuntime-6.0.3/sbin:/usr/op/EXASuite-6/EXASolution-6.0.3/bin/Console:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    EXA_IMG_VERSION="6.0.3-d1" \
-    EXA_DB_VERSION="6.0.3" \
-    EXA_OS_VERSION="6.0.3" \
-    EXA_RE_VERSION="6.0.3" 
+ADD EXAClusterOS-6.0.4_LS-DOCKER-CentOS-6.8_x86_64.tar.gz              /
+ENV PATH=/usr/opt/EXASuite-6/EXAClusterOS-6.0.4/bin:/usr/opt/EXASuite-6/EXAClusterOS-6.0.4/sbin:/usr/opt/EXASuite-6/EXARuntime-6.0.4/bin:/usr/opt/EXASuite-6/EXARuntime-6.0.4/sbin:/usr/op/EXASuite-6/EXASolution-6.0.4/bin/Console:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    EXA_IMG_VERSION="6.0.4-d1" \
+    EXA_DB_VERSION="6.0.4" \
+    EXA_OS_VERSION="6.0.4" \
+    EXA_RE_VERSION="6.0.4" 
 
-ENTRYPOINT ["/usr/opt/EXASuite-6/EXAClusterOS-6.0.3/devel/docker/exadt"]
+ENTRYPOINT ["/usr/opt/EXASuite-6/EXAClusterOS-6.0.4/devel/docker/exadt"]
 CMD ["init-sc"]

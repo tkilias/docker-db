@@ -54,7 +54,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.3"
+        self.version = "6.0.4"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -170,6 +170,11 @@ class EXAConf:
                         node_sec = self.config[section]
                         node_sec["Name"] = node_sec["Hostname"]
                         del node_sec["Hostname"]
+            # 6.0.4 :
+            # - Revision number has been added
+            if self.compare_versions("6.0.4", conf_version) == 1:
+                if "Revision" not in self.config["Global"].scalars:
+                    self.config["Global"]["Revision"] = 1
             # always increase version number
             self.config["Global"]["ConfVersion"] = self.version
             self.commit()
@@ -389,6 +394,7 @@ class EXAConf:
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
+        glob_sec["Revision"] = 1
         glob_sec["ClusterName"] = name
         glob_sec["Platform"] = platform
         glob_sec["LicenseFile"] = os.path.abspath(license) if license else ""
@@ -915,6 +921,17 @@ class EXAConf:
         return section.split(":")[1].strip()
 #}}}
  
+#{{{
+    def get_revision(self):
+        """
+        Returns the revision number (or 0, if not found).
+        """
+        if "Revision" in self.config["Global"].scalars:
+            return self.config["Global"]["Revision"]
+        else:
+            return 0
+#}}}
+
 #{{{ Get conf path
     def get_conf_path(self):
         """
