@@ -6,13 +6,13 @@ import shutil
 from libexadt.EXAConf import config
 
 #import sys
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.4/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.4/share/exaoperation')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.6/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.6/share/exaoperation')
 
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.0.4"
+my_version = "6.0.6"
 info_arc_prefix = "exasol_docker_info"
 
 #{{{ static variables for the "self contained image"
@@ -441,7 +441,7 @@ def init_sc(cmd):
         os.remove(cos_auth_socket)
 
     # 13. call exainit
-    exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.4/libexec/exainit.py'
+    exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.6/libexec/exainit.py'
     log_err("exadt:: calling '%s'" % exainit_cmd)
     os.execl(exainit_cmd, exainit_cmd)
 #}}}
@@ -825,7 +825,10 @@ def stop_database(cmd):
         sys.exit(1)
     try:
         drh = docker_rpc_handler.docker_rpc_handler(exaconf)
-        drh.stop_database(cmd.name)
+        if cmd.kill:
+            drh.kill_database(cmd.name)
+        else:
+            drh.stop_database(cmd.name)
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)
@@ -1297,6 +1300,11 @@ def main():
             type=str,
             default="all",
             help='database to be stopped')
+    parser_stdb.add_argument(
+            '--kill', '-k',
+            action='store_true',
+            default=False,
+            help='force-stop DB immediately')
     parser_stdb.set_defaults(func=stop_database)
        
     # list-dbs command

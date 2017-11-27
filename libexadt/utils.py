@@ -1,6 +1,6 @@
 #! /usr/bin/env python2.7
 
-import re, base64, string, random, os, subprocess, time, shutil, hashlib
+import re, base64, string, random, os, subprocess, time, shutil, hashlib, uuid
 # pwd is only available on UNIX systems
 try:
     import pwd
@@ -140,4 +140,12 @@ def md5(filename):
         for chunk in iter(lambda: f.read(4096), b''):
             md5sum.update(chunk)
     return md5sum.hexdigest()
+#}}}
+
+#{{{ Generate node uuid    
+def gen_node_uuid():
+    """
+    Generates a UUID for EXASOL cluster nodes (40 chars long). 
+    """
+    return (uuid.uuid4().hex + uuid.uuid4().hex)[:40].upper()
 #}}}

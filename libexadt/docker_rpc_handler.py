@@ -43,6 +43,29 @@ class docker_rpc_handler(rpc_handler.rpc_handler):
         return True
 #}}}
  
+#{{{ Kill database
+    def kill_database(self, name="all"):
+        """
+        Immediately force-stops all databases (or the given one) in the current cluster.
+        """
+
+        filters = None
+        if name != "all":
+            filters = {"name": name}
+        db_configs = self.exaconf.get_databases(filters=filters)
+
+        if len(db_configs) == 0:
+            if name == 'all':
+                self.log("No databases found.")
+            else:
+                self.log("Could not find database '%s'!" % name)
+            return False
+        
+        for db in db_configs.iterkeys():
+            self.dh.execute("dwad_client stop-force %s" % db, quiet=True)
+        return True
+#}}}
+ 
 #{{{ Start database
     def start_database(self, name="all"):
         """
