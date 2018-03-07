@@ -1,18 +1,17 @@
 #! /usr/bin/env python2.7
 
-import sys, os, argparse, pprint, subprocess, time, tarfile, io
+import sys, os, argparse, pprint, subprocess, time, tarfile, io, docker
 from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, docker_rpc_handler, utils 
 import shutil
 from libexadt.EXAConf import config
 
-#import sys
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.6/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.6/share/exaoperation')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.7/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.7/share/exaoperation')
 
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.0.6"
+my_version = "6.0.7"
 info_arc_prefix = "exasol_docker_info"
 
 #{{{ static variables for the "self contained image"
@@ -22,7 +21,6 @@ sc_owner = 500
 sc_group = 500
 sc_cluster_name = "cl4"
 sc_image = "exasol/docker-db:latest" #not relevant
-sc_num_nodes = 1
 sc_device_type = "file"
 sc_license = "/.license.xml"
 cos_auth_socket = "/var/run/ecos_unix_auth"
@@ -346,14 +344,19 @@ def init_sc(cmd):
     else:
         log_err("exadt:: '%s' already exists! Doing partial initialization." % sc_etc)
 
-    # 2. Create EXAConf (may be uninitialized)
+    # 2. Determine the local IP adress
+    log_err("exadt:: searching for the first interface with state UP")
+    first_if = utils.get_first_interface(timeout=15)
+    local_ifs = utils.get_all_interfaces(timeout=15, up_only=True)
+
+    # 3. Create EXAConf (may be uninitialized)
     try:
         exaconf = EXAConf.EXAConf(sc_etc, False)
     except EXAConf.EXAConfError as e:
         log_err(e)
         sys.exit(1)  
  
-    # 3. check compatibility before doing anything else
+    # 4. check compatibility before doing anything else
     # --> the persistent volume may need to be updated
     if exaconf.initialized():
         (c, res) = exaconf.check_update_needed(db_version=db_version, 
@@ -363,41 +366,61 @@ def init_sc(cmd):
             print "The given docker volume is not compatible with this docker image because of the following version mismatch(es):\n%sPlease update the volume (using 'update-sc')!" % (res)
             sys.exit(1)
  
-    # 4. Create all other directories if they don't exist
+    # 5. Create all other directories if they don't exist
     create_node_dirs(sc_root, exaconf)
 
-    # 5. copy license to the correct destination
+    # 6. copy license to the correct destination
     log_err("exadt:: copying license file '%s' to '%s'" % (sc_license, sc_etc))
     shutil.copy(sc_license, os.path.join(sc_etc, "license.xml"))
 
-    # 6. Init EXAConf
+    # 7. Init EXAConf
     #    NOTE : the version numbers are taken from the environment, 
     #           the image name is not relevant and the license has already
     #           been copied to the right place.
     if not exaconf.initialized():
         log_err("exadt:: initializing EXAConf")
         exaconf.initialize(sc_cluster_name, sc_image, 
-                           sc_num_nodes, sc_device_type, 
+                           cmd.num_nodes, sc_device_type, 
                            False, "Docker",
                            license = "/exa/etc/license.xml",
                            db_version = db_version,
                            os_version = os_version,
                            img_version = img_version,
-                           add_archive_volume=False)
-       
-
-    # 7. set correct IP address
-    log_err("exadt:: searching for the first interface with state UP")
-    local_if = utils.get_first_interface(15)
-    try:
-        exaconf.set_node_network(11, private=local_if[1])
-    except EXAConf.EXAConfError as e:
-        log_err(e)
-        sys.exit(1)
-    log_err("exadt:: using interface '%s' with address '%s'." % (local_if[0], local_if[1]))
-
+                           add_archive_volume=False,
+                           quiet=True,
+                           template_mode=cmd.template)
+        # Set local IP in EXAConf
+        # --> skip in 'template' mode (will probably be replaced anyway)
+        if not cmd.template:
+            try:
+                exaconf.set_node_network(cmd.node_id, private=first_if[1])
+            except EXAConf.EXAConfError as e:
+                log_err(e)
+                sys.exit(1)
+            log_err("exadt:: using interface '%s' with address '%s'." % (first_if[0], first_if[1]))
+    # if EXAConf is already initialized, we compare the current local IP
+    # with the one in the EXAConf, instead of setting it
+    elif not cmd.template:
+        nodes_conf = exaconf.get_nodes_conf()
+        if cmd.node_id in nodes_conf.iterkeys():
+            priv_net = nodes_conf[cmd.node_id].private_net
+            priv_net_up = False
+            # search for the current network within the list of UP interfaces
+            for up_if in local_ifs:
+                if priv_net == up_if[1]:
+                    priv_net_up = True
+                    break
+            if not priv_net_up:
+                log_err("exadt::ERROR: the private interface with address '%s' either does not exist or is down." 
+                        % (priv_net))
+                sys.exit(1)
+        else:
+            log_err("exadt::ERROR: can't find node ID '%s' in EXAConf." % cmd.node_id)
+            sys.exit(1)
+      
     # 8. create storage devices
-    if do_full_init:
+    # --> skip in 'template' mode
+    if do_full_init and not cmd.template:
         log_err("exadt:: creating EXAStorage devices")
         try:
             devh = device_handler.device_handler(exaconf)
@@ -411,8 +434,8 @@ def init_sc(cmd):
     try:
         conf = config()
         conf.owner = (sc_owner, sc_group)
-        exaconf.set_storage_volume_conf(conf)
-        exaconf.set_database_conf(conf)
+        exaconf.set_storage_volume_conf(conf, "all")
+        exaconf.set_database_conf(conf, "all")
         bfs_conf = config()
         bfs_conf.service_owner = (sc_owner, sc_group)
         exaconf.set_bucketfs_conf(bfs_conf)
@@ -429,21 +452,27 @@ def init_sc(cmd):
             os.lchown(os.path.join(root, f), sc_owner, sc_group)
 
     # 11. set and export hostname
-    hostname = "n11"
+    hostname = "n" + str(cmd.node_id)
     log_err("exadt:: setting hostname to '%s'" % hostname)
-    os.environ['EXA_NODE_ID'] = "11"
+    os.environ['EXA_NODE_ID'] = str(cmd.node_id)
     os.environ['HOSTNAME'] = hostname
     subprocess.call(['/bin/hostname', hostname])
 
     # 12. remove authentication socket if it exists
     if os.path.exists(cos_auth_socket):
         log_err("exadt:: removing '%s'" % cos_auth_socket)
-        os.remove(cos_auth_socket)
+        os.remove(cos_auth_socket)        
 
     # 13. call exainit
-    exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.6/libexec/exainit.py'
-    log_err("exadt:: calling '%s'" % exainit_cmd)
-    os.execl(exainit_cmd, exainit_cmd)
+    # --> or exit if requested
+    if cmd.template:
+        log_err("exadt:: template mode: printing EXAConf and exiting:\n")
+        exaconf.config.write(outfile=sys.stdout)
+        sys.exit(0)
+    else:
+        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.7/libexec/exainit.py'
+        log_err("exadt:: calling '%s'" % exainit_cmd)
+        os.execl(exainit_cmd, exainit_cmd)
 #}}}
 
 #{{{ Create node dirs
@@ -455,6 +484,12 @@ def create_node_dirs(node_root, exaconf):
         os.makedirs(node_root)
     if not os.path.exists(os.path.join(node_root, exaconf.etc_dir)):
         os.makedirs(os.path.join(node_root, exaconf.etc_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.tmp_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.tmp_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.spool_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.spool_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.sync_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.sync_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.ssl_dir)):
         os.makedirs(os.path.join(node_root, exaconf.ssl_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):
@@ -544,8 +579,11 @@ def list_clusters(cmd):
 def docker_version(cmd):
     try:
         dh = docker_handler.docker_handler(verbose=True)
+        print "====== Docker Version ======"
         pp = pprint.PrettyPrinter()
         pp.pprint(dh.version())
+        print "====== Docker-py Version ======"
+        print docker.version
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)
@@ -1106,6 +1144,21 @@ def main():
     parser_isc = cmdparser.add_parser(
             'init-sc',
             help='initialize the container of a self-contained image') 
+    parser_isc.add_argument(
+            '--template', '-t',
+            default = False,
+            action = 'store_true',
+            help="print an EXAConf template and exit (also prepares '/exa')")
+    parser_isc.add_argument(
+            '--node-id', '-i',
+            type = str,
+            default = '11',
+            help='node ID of the current container')
+    parser_isc.add_argument(
+            '--num-nodes', '-n',
+            type = int,
+            default = 1,
+            help='number of cluster nodes')
     parser_isc.add_argument(
             '--img-version', '-I',
             type = str,

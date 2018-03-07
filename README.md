@@ -14,20 +14,18 @@ Currently supported features:
 
 # How to use this image
 
-**NOTE: Because of a bug in dockerpy 2.3.0 version 2.2.1 is enforced in 'exadt_requirements.txt'**
-
 - Pull the image to your Docker host:
   ```console
   $ docker pull exasol/docker-db:latest
-  ```
-- Install the `exadt` dependencies:
-  ```console
-  $ pip install --upgrade -r exadt_requirements.txt
   ```
 - Install `exadt`:
   ```console
   $ git clone https://github.com/EXASOL/docker-db.git
   $ cd docker-db
+  ```
+- Install the `exadt` dependencies:
+  ```console
+  $ pip install --upgrade -r exadt_requirements.txt
   ```
 - Create and configure your virtual EXASOL cluster by using the commands described in the `exadt` documentation below.
 
@@ -35,9 +33,13 @@ Currently supported features:
 
 The `exadt` command-line tool is used to create, initialize, start, stop, update and delete a Docker based EXASOL cluster.
 
+**NOTE: exadt currently only supports single-host-clusters. See below for how to create a multi-host-cluster (with one container per host).**
+
 ## 1. Creating a cluster
 
 Select a root directory for your EXASOl cluster. It will be used to store the data, metadata and buckets of all local containers and should therefore be located on a filesystem with sufficient free space (min. 10 GiB are recommended).
+
+**NOTE: this example creates only one node. You can easily create mutliple (virtual) nodes by using the --num-nodes option.**
 
 ```console
 $ ./exadt create-cluster --root ~/MyCluster/ --create-root MyCluster
@@ -216,31 +218,40 @@ Note that all file devices (even the mapped ones) and the root directory are del
 
 A cluster has to be stopped before it can be deleted (even if all containers are down)!
 
-# Manually creating an EXASOL container
+# Creating a stand-alone EXASOL container
 
 Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an EXASOL container from the EXASOL docker image using the following command:
 
 ```console
-$ docker run --detach --privileged --stop-timeout 120  exasol/docker-db:latest
+$ docker run --name exasoldb -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120  exasol/docker-db:latest
 ```
+
+In this example port 8888 (within the container) is exposed on the local port 8899. Use this port to connect to the DB.
 
 All data is stored within the container and lost when the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
 
 ```console
-$ docker run --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:latest
+$ docker run --name exasoldb  -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:latest
 ```
 
 See [the Docker volumes documentation](https://docs.docker.com/engine/tutorials/dockervolumes/) for more examples on how to create and manage persistent volumes.
 
 **NOTE: Make sure the database has been shut down correctly before stopping the container!**
 
-A high stop-timeout (see example above) increases the chance that the DB can be shut down gracefully before the container is stopped, but it's not guaranteed. However, it can be stopped manually by executing the following command within the container:
+A high stop-timeout (see example above) increases the chance that the DB can be shut down gracefully before the container is stopped, but it's not guaranteed. However, it can be stopped manually by executing the following command within the container (after attaching to it):
 
 ```console
 $ dwad_client stop-wait DB1
 ```
 
-## Updating the persistent volume of a manually created container
+Or from outside the container:
+
+```console
+$ docker exec -ti exasoldb dwad_client stop-wait DB1
+```
+
+
+## Updating the persistent volume of a stand-alone EXASOL container
 
 Starting with version 6.0.3-d1, an existing persistent volume can be updated (for use with a later version of an EXASOL image) by calling the following command with the *new* image:
 
@@ -259,6 +270,207 @@ Container has been successfully updated!
 ```
 
 After that, a new container can be created (from the new image) using the old / updated volume.
+
+# Creating a multi-host EXASOL cluster
+
+Starting with version 6.0.7-d1, it's possible to create multiple containers on different hosts and connect them to a cluster (one container per host). 
+
+## 1. Create the configuration 
+
+First you have to create the configuration for the cluster. There are two possible ways to do so:
+ 
+### a. Create an /exa/ directory template (RECOMMENDED):
+
+Execute the following command (`--num-nodes` is the number of containers in the cluster):
+
+```console
+$ docker run -v $HOME/exa_template:/exa --rm -i exasol/docker-db:latest init-sc --template --num-nodes 3
+```
+
+After the command has finished, the directory `$HOME/exa_template` contains all subdirectories as well as an EXAConf template (in `/etc`). The EXAConf is also printed to stdout.
+ 
+### b. Create an EXAConf template
+
+You can create a template file and redirect it to wherever you want by executing: 
+
+```console
+$ docker run --rm -i exasol/docker-db:latest init-sc --template --num-nodes 3 > ~/MyExaConf
+```
+
+**NOTE: we recommend to create an /exa/ template directory and the following steps assume that you did so. If you choose to only create the EXAConf file, you have to build a new Docker image with it and create the EXAStorage devices files within that image.**
+
+## 2. Complete the configuration
+
+The EXAConf template has to be completed before the cluster can be started. You have to provide:
+
+#### The private network of all nodes:
+```console
+[Node : 11]
+    PrivateNet = 10.10.10.11/24 # <-- replace with the real network
+```
+
+#### The EXAStorage devices on all nodes:
+```console
+[[Disk : default]]
+        Devices = dev.1    #'dev.1.data' and 'dev.1.meta' files must be located in '/exa/data/storage'
+```
+
+**NOTE: You can leave this entry as it is if you create the devices as described below.**
+
+#### The EXAVolume sizes:
+```console
+[EXAVolume : DataVolume1]
+    Type = data
+    Nodes = 11, 12, 13
+    Disk = default
+    # Volume size (e. g. '1 TiB')
+    Size =  # <-- enter volume size here
+```
+  
+#### The network port numbers (optional)
+
+If you are using the host network mode (see "Start the cluster" below), you may have to adjust the port numbers used by the EXASOL services. The one that's most likely to collide is the SSH daemon, which is using the well-known port 22. You can change it in EXAConf:
+```console
+[Global]
+    SSHPort = 22  # <-- replace with any unused port number
+```
+
+The other EXASOL services (e. g. Cored, BucketFS and the DB itself) are using port numbers above 1024. However, you can change them all by editing EXAConf.
+ 
+#### The nameservers (optional):
+```console
+[Global]
+    ...
+    # Comma-separated list of nameservers for this cluster.
+    NameServers =
+```
+ 
+## 3. Copy the configuration to all nodes
+
+Copy the `$HOME/exa_template/` directory to all cluster nodes (the exact path is not relevant, but should be identical on all nodes).
+
+## 4. Create the EXAStorage device files
+
+You can create the EXAStorage device files by executing (on each node):
+
+```console
+$ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1.data bs=1M count=1 seek=999
+$ touch $HOME/exa_template/data/storage/dev.1.meta
+```
+
+This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data and also a file that holds the metadata for that device. Adjust the size to your needs. 
+
+**NOTE: Alternatively you can partition a block-device (the meta partition needs only 2 MB) and place symlinks (or new device files) named `dev.1.data` and `dev.1.meta` in the same directory.**
+ 
+## 5. Start the cluster
+
+The cluster is started by creating all containers individually and passing each of them its ID from the EXAConf. For `n11` the command would be:
+
+```console
+$ docker run --detach --network=host --privileged -v $HOME/exa_template:/exa exasol/docker-db:latest init-sc --node-id 11
+```
+
+**NOTE: this example uses the host network stack, i. e. the containers are directly accessing a host interface to connect to each other. There is no need to expose ports in this mode: they are all accessible on the host.**
+
+# Installing custom JDBC drivers
+
+Starting with version 6.0.7-d1, custom JDBC drivers can be added by uploading them into a bucket. The bucket and path for the drivers can be configured in each database section of EXAConf. The default configuration is:
+
+```console
+[DB : DB1]
+    ...
+    # OPTIONAL: JDBC driver configuration
+    [[JDBC]]
+        BucketFS = bfsdefault
+        Bucket = default
+        # Directory within the bucket that contains the drivers
+        Dir = drivers/jdbc
+```
+
+In order for the database to find the driver, you need to upload it into a subdirectory of `drivers/jdbc` of the default bucket (which is automatically created if you don't modify EXAConf). See the section `Installing Oracle drivers` for help on how to upload files to BucketFS.
+
+In addition to the driver file(s), you also have to create and upload a file called `settings.cfg` , that looks like this:
+
+```console
+DRIVERNAME=MY_JDBC_DRIVER
+JAR=my_jdbc_driver.jar
+DRIVERMAIN=com.mydriver.jdbc.Driver
+PREFIX=jdbc:mydriver:
+FETCHSIZE=100000
+INSERTSIZE=-1
+```
+
+Change the variables DRIVERNAME, JAR, DRIVERMAIN and PREFIX according to your driver and upload the file (into the **same directory** as the driver itself).
+
+**IMPORTANT: Do not modify the last two lines!**
+
+If you use the default bucket and the default path, you can add multiple JDBC drivers during runtime. The DB will find them without having to restart it (as long as they're located in a subfolder of the default path). Otherwise, a container restart is required. 
+ 
+# Installing Oracle drivers
+
+Starting with version 6.0.7-d1, Oracle drivers can be added by uploading them into a bucket. The bucket and path for the drivers can be configured in each database section of EXAConf. The default configuration is:
+
+```console
+[DB : DB1]
+    ...
+    # OPTIONAL: Oracle driver configuration
+    [[ORACLE]]
+        BucketFS = bfsdefault
+        Bucket = default
+        # Directory within the bucket that contains the drivers
+        Dir = drivers/oracle
+```
+
+In order for the database to find the driver, you have to upload it to `drivers/oracle` of the default bucket (which is automatically created if you don't modify EXAConf).
+
+You can use `curl` for uploading, e. g.:
+
+```
+$ curl -v -X PUT -T instantclient-basic-linux.x64-12.1.0.2.0.zip http://w:PASSWORD@10.10.10.11:6583/default/drivers/oracle/instantclient-basic-linux.x64-12.2.0.1.0.zip
+```
+
+Replace `PASSWORD` with the `WritePasswd` for the bucket. You can find it in the EXAConf. It's base64 encoded and can be decoded like this:
+
+```
+$ awk '/WritePasswd/{ print $3; }' EXAConf | base64 -d
+```
+
+**NOTE: The only currently supported driver version is 12.1.0.20. Please download the package `instantclient-basic-linux.x64-12.1.0.2.0.zip` from oracle.com and upload it as described above.**
+ 
+# Troubleshooting
+
+### Error after modifying EXAConf
+
+> ERROR::EXAConf: Integrity check failed! The stored checksum 'a2f605126a2ca6052b5477619975664f' does not match the actual checksum 'f9b9df0b9247b4696135c135ea066580'. Set checksum to 'COMMIT' if you made intentional changes.
+
+If you see a message similar to the one above, you probably modified an EXAConf that has already been used by an EXASOL container or `exadt`. It is issued by the EXAConf integrity check (introduced in version 6.0.7-d1) that protects EXAConf from accidental changes and detects file corruption.
+
+In order to solve the problem you have to set the checksum within EXAConf to 'COMMIT'. It can be found in the 'Global' section, near the top of the file:
+
+```console
+[Global]
+...
+Checksum = COMMIT
+...
+```
+
+### Error during container start because of missing O_DIRECT support
+
+> WORKER::ERROR: Failed to open device '/exa/data/storage/dev.1.data'!
+> WORKER:: errno = Invalid argument
+
+If the container does not start up properly and you see an error like this in the logfiles below `/exa/logs/cored/`, your filesystem probably does not support `O_DIRECT ` I/O mode. This is the case with Docker for Mac.
+
+We strongly recommend to use only Linux for the EXASOL Docker image. If you are already using Linux, but can't enable O_DIRECT for specific reasons, you can disable O_DIRECT mode by adding a line to each disk in EXAConf:
+
+```console
+[Node : 11]
+    ...
+    [[Disk : default]]
+        DirectIO = False
+```
+
+**This feature is experimental and may cause significantly higher memory usage and fluctuating I/O throughput!**
 
 # Reporting bugs
 
@@ -279,8 +491,10 @@ Also try to answer the following questions in your bug report:
 
 # Supported Docker versions
 
-`exadt` and the EXASOL Docker image have been developed and tested with Docker 17.05.0-ce (API 1.29) and docker-py 2.2.1. It may also work with earlier versions, but that is not guaranteed.
+`exadt` and the EXASOL Docker image have been developed and tested with Docker 17.09.0-ce (API 1.32) and docker-py 2.6.1. It may also work with earlier versions, but that is not guaranteed.
  
+**NOTE: docker-py version 2.3.0 contains a known bug that prevents exadt from starting containers.**
+
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
  
 # Supported OS

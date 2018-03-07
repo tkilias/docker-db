@@ -523,6 +523,26 @@ class docker_handler:
             return False
 #}}}
  
+#{{{ Merge exaconf
+    def merge_exaconf(self):
+        """
+        Merges the EXAConf copies within the containers into the 'external' EXAConf in the cluster root directory.
+        """
+
+        try:
+            exaconf_list = []
+            node_volumes = self.exaconf.get_docker_node_volumes()
+            for n,volume in node_volumes.iteritems():
+                node_etc_dir = os.path.join(volume, self.exaconf.etc_dir)
+                if os.path.exists(os.path.join(node_etc_dir, "EXAConf")):
+                    exaconf_list.append(EXAConf.EXAConf(node_etc_dir, True))
+            if len(exaconf_list) > 0:
+                self.exaconf.merge_node_uuids(exaconf_list)     
+                self.log("Merged EXAConf from %i node(s)." % len(exaconf_list))
+        except EXAConf.EXAConfError as e:
+            self.log("Error while merging EXAConf: '%s'! Skipping merge." % e)
+#}}}
+
 #{{{ Start cluster
     def start_cluster(self, cmd=None, auto_remove=False, dummy_mode=False):
         """
@@ -533,7 +553,7 @@ class docker_handler:
             - creating docker containers for all cluster-nodes
             - starting docker containers
         If 'dummy_mode' is true, all checks and preparations are skipped. Only containers are created 
-        started. This can be used to execute arbitrary commands in the containers (if 'auto_remove'
+        and started. This can be used to execute arbitrary commands in the containers (if 'auto_remove'
         is also true, these containers will be removed by Docker as soon as the container process exits).
         """
 
@@ -553,8 +573,11 @@ class docker_handler:
                 dh = device_handler.device_handler(self.exaconf)
                 if dh.check_free_space() == False:
                     raise DockerError("Check for space usage failed! Aborting startup.")
+      
+            # 2. merge EXAConf copies
+            self.merge_exaconf()
 
-            # 2. copy EXAConf and license to all node volumes
+            # 3. copy EXAConf and license to all node volumes
             conf_path = self.exaconf.get_conf_path()
             license = self.exaconf.get_license_file()
             node_volumes = self.exaconf.get_docker_node_volumes()
@@ -562,7 +585,7 @@ class docker_handler:
             for n,volume in node_volumes.iteritems():
                 shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
                 shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
-            # 2.1 Copy SSL files (if they exist)
+            # 3.1 Copy SSL files (if they exist)
             try:
                 ssl_conf = self.exaconf.get_ssl_conf()
                 if ssl_conf.has_key("cert") and os.path.isfile(ssl_conf.cert):
@@ -574,7 +597,7 @@ class docker_handler:
             except EXAConf.EXAConfError as e:
                 print "Skipping SSL configuration (not present in EXAConf)."
 
-            # 3. create networks (if network mode is not "host")
+            # 4. create networks (if network mode is not "host")
             if docker_conf.network_mode != "host":
                 try:
                     networks = self.create_networks()
@@ -614,8 +637,9 @@ class docker_handler:
         except Exception as e:
             print "Error during shutdown: %s! Continueing anyway..." % e
             ex = e
-        # save logs before removing containers
+        # save logs and merge EXAConf before removing containers
         self.save_logs()
+        self.merge_exaconf()
         try:
             if stopped:
                 self.remove_containers()

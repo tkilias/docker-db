@@ -5,10 +5,11 @@ source "$(dirname $0)/functions.sh"
 BINARY="$(readlink -f "$(dirname "$0")/../exadt")"
 LICENSE="$(readlink -f "$(dirname "$0")/../license/license.xml")"
 ROOT="$HOME"
-IMAGE="exasol/docker-db-testing:latest"
+IMAGE="exasol/docker-db-dev:latest"
 DOCKER="$(which docker)"
 TMP_DIR=$(mktemp -d)
 INFO_FILE="$TMP_DIR/exasol_info.tgz"
+NUM_NODES=1
 
 cleanup() {
     rm -rf "$TMP_DIR"
@@ -25,9 +26,10 @@ die() {
 }
  
 usage() {
-    echo "Usage: $0 [-i IMAGE] [-r ROOT] [-b EXADT_BINARY]"
+    echo "Usage: $0 [-i IMAGE] [-r ROOT] [-b EXADT_BINARY] [-D DOCKER CMD]"
     echo "Parameters:"
     echo "-i    : Docker image to use for the test (default: '$IMAGE')."
+    echo "-n    : Number of nodes  / containers for the test-cluster (default: '$NUM_NODES')."
     echo "-D    : Docker command (default: '$DOCKER')."
     echo "-r    : Root directory for cluster creation (default: '$ROOT')."
     echo "-b    : The exadt binary (default: '$BINARY')."
@@ -35,11 +37,15 @@ usage() {
 }
 
 # parse parameters
-while getopts "i:D:r:b:l:" opt; do
+while getopts "i:n:D:r:b:l:h" opt; do
     case "$opt" in
         i)
             IMAGE="$OPTARG"
             log "INFO:: Using image '$IMAGE'."
+            ;;
+        n)
+            NUM_NODES="$OPTARG"
+            log "INFO:: Using '$NUM_NODES' nodes for test-cluster."
             ;;
         D)
             DOCKER="$OPTARG"
@@ -70,13 +76,13 @@ done
 
 
 log "=== Starting exadt basic test ==="
+$DOCKER pull "$IMAGE" #does not work with locally built dev-images
 set -e
-$DOCKER pull "$IMAGE"
 "$BINARY" list-clusters
 "$BINARY" create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster
 "$BINARY" list-clusters
 "$BINARY" collect-info --outfile "$INFO_FILE" MyCluster
-"$BINARY" init-cluster --image "$IMAGE" --license "$LICENSE" --device-type file --auto-storage --force MyCluster
+"$BINARY" init-cluster --image "$IMAGE" --num-nodes "$NUM_NODES" --license "$LICENSE" --device-type file --auto-storage --force MyCluster
 "$BINARY" list-clusters
 "$BINARY" collect-info --outfile "$INFO_FILE" MyCluster
 "$BINARY" start-cluster MyCluster

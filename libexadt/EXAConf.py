@@ -1,4 +1,4 @@
-import os, stat, ipaddr, configobj
+import sys, os, stat, ipaddr, configobj, StringIO, hashlib
 from utils import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid
 from collections import OrderedDict as odict
 
@@ -6,6 +6,17 @@ from collections import OrderedDict as odict
 class EXAConfError(Exception):
     """
     The EXAConf exception class.
+    """
+    def __init__(self, msg):
+        self.msg = "ERROR::EXAConf: " + msg
+    def __str__(self):
+        return repr(self.msg)
+#}}}
+
+#{{{ Class EXAConfIntegrityError
+class EXAConfIntegrityError(EXAConfError):
+    """
+    Special exception raised if the integrity check fails.
     """
     def __init__(self, msg):
         self.msg = "ERROR::EXAConf: " + msg
@@ -39,11 +50,11 @@ class EXAConf:
     """
 
 #{{{ Init
-    def __init__(self, root, initialized):
+    def __init__(self, root, initialized, filename="EXAConf"):
         """ 
         Creates a new EXAConf instance from the file 'EXAConf' within the given 
-        root directory. If 'initialized' is true, the content of 'EXAConf'
-        will be validated.
+        root directory. If 'initialized' is true, an exception is thrown if
+        the file 'EXAConf' does not exist.
         """
 
         # Version numbers of the current cluster
@@ -54,7 +65,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.6"
+        self.version = "6.0.7"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -69,6 +80,9 @@ class EXAConf:
         self.storage_dir = "data/storage"
         self.bucketfs_dir = "data/bucketfs"
         self.etc_dir = "etc"
+        self.tmp_dir = "tmp"
+        self.spool_dir = "spool"
+        self.sync_dir = "spool/sync"
         self.ssl_dir = "etc/ssl"
         self.md_dir = "metadata"
         self.md_storage_dir = "metadata/storage"
@@ -80,6 +94,8 @@ class EXAConf:
         self.docker_log_dir = "logs/docker"
         self.node_uuid = "etc/node_uuid"
         self.supported_platforms = ['Docker', 'VM']
+        self.def_cored_port = 10001
+        self.def_ssh_port = 22
         self.def_bucketfs = "bfsdefault"
         self.def_bucket = "default"
         self.def_db_port = 8888
@@ -89,6 +105,12 @@ class EXAConf:
         self.def_docker_network_mode = "bridge"
         self.docker_logs_filename = "docker_logs"
         self.docker_max_logs_copies = 9
+        self.def_jdbc_driver_dir = "drivers/jdbc"
+        self.def_oracle_driver_dir = "drivers/oracle"
+        self.def_vol_block_size = 4096 # block-size in bytes
+        self.def_vol_stripe_size = 262144 # stripe-size in bytes
+        self.def_arch_vol_block_size = 65536
+        self.def_arch_vol_stripe_size = 65536
         # set root to container_root if omitted
         # --> only true when called from within the container
         if not root:
@@ -98,7 +120,7 @@ class EXAConf:
         # check if root actually exists
         if not os.path.isdir(self.root):
             raise EXAConfError("root directory '%s' does not exist (or is a file)!" % self.root)
-        self.conf_path = os.path.join(self.root, "EXAConf")
+        self.conf_path = os.path.join(self.root, filename)
         # if initialized is true, the given file has to exist!
         if initialized and not os.path.exists(self.conf_path):
             raise EXAConfError("EXAConf file '%s' does not exist! Has the cluster been initialized?" % self.conf_path)
@@ -114,6 +136,7 @@ class EXAConf:
         # update and validate content if EXAConf is already initialized
         # also read current version numbers from config
         if self.initialized():
+            self.check_integrity()
             self.update_self()
             self.validate()
             self.set_os_version(self.config["Global"]["OSVersion"])
@@ -144,12 +167,42 @@ class EXAConf:
                 return 1
         return 0
 #}}}
+ 
+#{{{ Check integrity
+    def check_integrity(self):
+        """
+        Checks if the current checksum is valid by computing a new one and comparing them (if the checksum is not 'NONE').
+        If the current checksum is 'COMMIT', all changes are commited along with the new checksum (also, the  revision 
+        number is increased).
+        """
+
+        curr_checksum = self.get_checksum()
+        # ignore (checksum will be computed on next commit)
+        if curr_checksum.upper() == "NONE":
+            return
+        # warn, because no checksum will ever be computed
+        elif curr_checksum.upper() == "DISABLED":
+            sys.stderr.write("WARNGING::EXAConf: Integrity check is disabled!\n")
+            return
+        # commit
+        elif curr_checksum.upper() == "COMMIT":
+            self.commit()
+            return
+        # compare
+        new_checksum = self.compute_checksum()
+        if curr_checksum != new_checksum:
+            raise EXAConfIntegrityError("Integrity check failed! The stored checksum '%s' does not match the actual checksum '%s'. Set checksum to 'COMMIT' if you made intentional changes." % (curr_checksum, new_checksum))
+#}}}
 
 #{{{ Update self
     def update_self(self):
         """
         Checks if the EXAConf version stored in the file is older than the current one and
         updates options, section names and values if necessary.
+
+        NOTE : not all newly introduced options are added to an existing EXAConf, only the
+        ones that are necessary for exadt / exainit. For all other options, default values
+        are used if they are not present.
         """
         conf_version = self.config["Global"]["ConfVersion"]
         diff = self.compare_versions(self.version, conf_version)
@@ -175,18 +228,28 @@ class EXAConf:
             if self.compare_versions("6.0.4", conf_version) == 1:
                 if "Revision" not in self.config["Global"].scalars:
                     self.config["Global"]["Revision"] = 1
-            # 6.0.5 :
+            # 6.0.7 :
             # - Node UUID has been added
             #   It is initialized with 'IMPORT' because the existing nodes already have a UUID 
             #   (generated by 'exainit') and we don't want to change it! Instead, exainit
             #   imports the existing node UUID into EXAConf during the next boot process.
-            if self.compare_versions("6.0.5", conf_version) == 1:
+            # 
+            # - IMPORTANT: exainit respects 'IMPORT' only since 6.0.7 (although it has been
+            #   introduced in 6.0.5), therefore we need to set the UUID to 'IMPORT', even if
+            #   it has been initialized with a different value when creating a cluster with
+            #   6.0.5 / 6.0.6 (it hasn't been used anyway).
+            #
+            # - Checksum has been added
+            if self.compare_versions("6.0.7", conf_version) == 1:
                 for section in self.config.sections:
                     if self.is_node(section):
                         node_sec = self.config[section]
-                        if "UUID" not in node_sec.scalars:
-                            node_sec["UUID"] = "IMPORT"
-            # always increase version number
+                        node_sec["UUID"] = "IMPORT"
+                # we want the modified EXAConf to be commited asap 
+                # (in order to have integrity protection), so we
+                # set it to 'COMMIT'
+                if "Checksum" not in self.config["Global"].scalars:
+                    self.config["Global"]["Checksum"] = "COMMIT"
             # always increase version number
             self.config["Global"]["ConfVersion"] = self.version
             self.commit()
@@ -350,6 +413,19 @@ class EXAConf:
         """ 
         Writes the configuration to disk (into '$RootDir/EXAConf')
         """
+
+        curr_checksum = self.get_checksum()
+        # special case : checksum protection is disabled
+        if curr_checksum.upper() == "DISABLED":
+            # don't store checksum but always increase revision
+            self.config["Global"]["Revision"] = str(int(self.get_revision()) + 1)
+        else:
+            new_checksum = self.compute_checksum()
+            # increase revision if old and new checksum are different
+            if curr_checksum != new_checksum:
+                self.config["Global"]["Checksum"] = new_checksum
+                self.config["Global"]["Revision"] = str(int(self.get_revision()) + 1)
+        # write config
         self.config.write()
         # reload in order to force type conversion 
         # --> parameters added as lists during runtime are converted back to strings (as if they have been added manually)
@@ -359,6 +435,42 @@ class EXAConf:
             os.chmod(self.conf_path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError as e:
             raise EXAConfError("Failed to change permissions for '%s': %s" % (self.conf_path, e))
+#}}}
+
+#{{{ Compute checksum
+    def compute_checksum(self):
+        """
+        Computes the MD5 sum of this EXAConf instance (but does NOT store it).
+        """
+
+        # replace and remember current revision and checksum
+        curr_revision = self.config["Global"]["Revision"]
+        curr_md5 = self.config["Global"]["Checksum"]
+        self.config["Global"]["Revision"] = "PLACEHOLDER"
+        self.config["Global"]["Checksum"] = "PLACEHOLDER"
+        # write config to string
+        serialized_conf = StringIO.StringIO()
+        self.config.write(outfile=serialized_conf)
+        # compute MD5 sum
+        md5 = hashlib.md5()
+        md5.update(serialized_conf.getvalue())
+        new_md5 = md5.hexdigest()
+        # restore revision and checksum
+        self.config["Global"]["Revision"] = curr_revision
+        self.config["Global"]["Checksum"] = curr_md5
+        return new_md5
+#}}}
+
+#{{{ Get checksum
+    def get_checksum(self):
+        """
+        Returns the current checksum that is stored in this EXAConf instance (does NOT compute a new one)."
+        """
+
+        if "Checksum" in self.config["Global"].scalars:
+            return self.config["Global"]["Checksum"]
+        else:
+            return "NONE"
 #}}}
  
 #{{{ Platform supported
@@ -380,7 +492,7 @@ class EXAConf:
 #{{{ Initialize 
     def initialize(self, name, image, num_nodes, device_type, force, platform, 
                    db_version=None, os_version=None, img_version=None, license=None,
-                   add_archive_volume=True):
+                   add_archive_volume=True, quiet=False, template_mode=False):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
@@ -388,7 +500,7 @@ class EXAConf:
 
         # check if EXAConf is already initialized
         if self.initialized():
-            if not force:
+            if not force and not quiet:
                 print "EXAConf file '%s' is already initialized!" % self.conf_path
                 return
             else:
@@ -406,18 +518,22 @@ class EXAConf:
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
-        glob_sec["Revision"] = 1
+        glob_sec["Revision"] = "0"
+        glob_sec["Checksum"] = "COMMIT"
         glob_sec["ClusterName"] = name
         glob_sec["Platform"] = platform
         glob_sec["LicenseFile"] = os.path.abspath(license) if license else ""
-        glob_sec["CoredPort"] = "10001"
+        glob_sec["CoredPort"] = self.def_cored_port
+        glob_sec["SSHPort"] = self.def_ssh_port
         glob_sec["Networks"] = "private"
+        glob_sec["NameServers"] = ""
         glob_sec["ConfVersion"] = self.version
         glob_sec["OSVersion"] = self.os_version
         glob_sec["DBVersion"] = self.db_version
         glob_sec["ImageVersion"] = self.img_version
         # comments
         glob_sec.comments["Networks"] = ["The type of networks for this cluster: 'public', 'private' or both."]
+        glob_sec.comments["NameServers"] = ["Comma-separated list of nameservers for this cluster."]
 
         # SSL section
         self.config["SSL"] = {}
@@ -452,6 +568,10 @@ class EXAConf:
             node_sec["PublicNet"] = ""
             node_sec["Name"] = "n" + str(node_id)
             node_sec["UUID"] = gen_node_uuid()
+            # Add device template in template mode
+            if template_mode:
+                node_sec["Disk : default"] = {"Devices" : "dev.1 #'dev.1.data' and 'dev.1.meta' files must be located in '%s'" 
+                        % os.path.join(self.container_root, self.storage_dir)}
             # Docker specific options:
             if platform == "Docker":
                 node_sec["DockerVolume"] = "n" + str(node_id)
@@ -481,7 +601,10 @@ class EXAConf:
         data_vol_sec = self.config["EXAVolume : DataVolume1"]
         data_vol_sec["Type"] = "data"
         data_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
-        data_vol_sec["Disk"] = ""
+        if template_mode:
+            data_vol_sec["Disk"] = "default"
+        else:
+            data_vol_sec["Disk"] = ""
         data_vol_sec["Size"] = ""
         data_vol_sec["Redundancy"] = "1"
         data_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
@@ -501,7 +624,10 @@ class EXAConf:
             archive_vol_sec = self.config["EXAVolume : ArchiveVolume1"]
             archive_vol_sec["Type"] = "archive"
             archive_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().keys() ] # list is correctly converted by ConfigObj
-            archive_vol_sec["Disk"] = ""
+            if template_mode:
+                archive_vol_sec["Disk"] = "default"
+            else:
+                archive_vol_sec["Disk"] = ""
             archive_vol_sec["Size"] = ""
             archive_vol_sec["Redundancy"] = "1"
             archive_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
@@ -523,11 +649,35 @@ class EXAConf:
         db_sec["Port"] = str(self.def_db_port)
         db_sec["Nodes"] = [ str(n) for n in self.get_nodes_conf().iterkeys() ] # list is correctly converted by ConfigObj
         db_sec["NumMasterNodes"] = str(self.get_num_nodes())
+        db_sec["Params"] = ""      
         # comments
         self.config.comments["DB : DB1"] = ["\n", "An EXASOL database"]
         db_sec.comments["Version"] = ["The EXASOL version to be used for this database"]
         db_sec.comments["Owner"] = ["User and group ID that should own this database"]
         db_sec.comments["MemSize"] = ["Memory size over all nodes (e. g. '1 TiB')"]
+        db_sec.comments["Params"] = ["OPTIONAL: DB parameters"]
+
+         # JDBC sub-section
+        db_sec["JDBC"] = {}
+        jdbc_sec = db_sec["JDBC"]
+        jdbc_sec["BucketFS"] = self.def_bucketfs
+        jdbc_sec["Bucket"] = self.def_bucket
+        jdbc_sec["Dir"] = self.def_jdbc_driver_dir
+        # comments
+        db_sec.comments["JDBC"] = ["OPTIONAL: JDBC driver configuration"]
+        jdbc_sec.comments["BucketFS"] = ["BucketFS that contains the JDBC driver"]
+        jdbc_sec.comments["Bucket"] = ["Bucket that contains the JDBC driver"]
+        jdbc_sec.comments["Dir"] = ["Directory within the bucket that contains the drivers"]
+        # Oracle sub-section
+        db_sec["Oracle"] = {}
+        oracle_sec = db_sec["Oracle"]
+        oracle_sec["BucketFS"] = self.def_bucketfs
+        oracle_sec["Bucket"] = self.def_bucket
+        oracle_sec["Dir"] = self.def_oracle_driver_dir
+        db_sec.comments["Oracle"] = ["OPTIONAL: Oracle driver configuration"]
+        oracle_sec.comments["BucketFS"] = ["BucketFS that contains the JDBC drivers"]
+        oracle_sec.comments["Bucket"] = ["Bucket that contains the JDBC drivers"]
+        oracle_sec.comments["Dir"] = ["Directory within the bucket that contains the drivers"]
 
         # BucketFS section
         self.config["BucketFS"] = {}
@@ -545,7 +695,7 @@ class EXAConf:
         bfs_sec["SyncKey"] = gen_base64_passwd(32)
         bfs_sec["SyncPeriod"] = "30000"
         # comments
-        self.config.comments["BucketFS : bfsdefault"] = ["\n","A Bucket filesystem"]
+        self.config.comments["BucketFS : %s" % self.def_bucketfs] = ["\n","A Bucket filesystem"]
         bfs_sec.comments["HttpPort"] = ["HTTP port number (0 = disabled)"]
         bfs_sec.comments["HttpsPort"] = ["HTTPS port number (0 = disabled)"]
         bfs_sec.comments["Path"] = ["OPTIONAL: path to this BucketFS (default: %s)" % os.path.join(self.container_root, self.bucketfs_dir)]
@@ -563,7 +713,8 @@ class EXAConf:
         bfs_sec.comments["Bucket : default"] = ["\n", "A bucket"]
 
         self.commit()
-        print "Successfully initialized configuration in '%s'." % self.conf_path
+        if not quiet:
+            print "Successfully initialized configuration in '%s'." % self.conf_path
 # }}}
  
 #{{{ Validate the configuration
@@ -871,8 +1022,25 @@ class EXAConf:
         self.commit()
 #}}}
 
+#{{{ Set node conf
+    def  set_node_conf(self, config, node_id):
+        """
+        Changes the values of the given keys for the given node 
+        (or all nodes).
+        """
+
+        nodes = self.get_nodes_conf()
+        for node in nodes.iteritems():
+            if node_id == "all" or node[0] == node_id:
+                node_sec = self.config["Node : " + str(node[0])]
+                if "uuid" in config.iterkeys():
+                    node_sec["UUID"] = str(config.uuid)
+
+        self.commit()
+#}}}
+
 #{{{ Set storage volume conf
-    def set_storage_volume_conf(self, config, volume="all"):
+    def set_storage_volume_conf(self, config, volume):
         """
         Changes the values of the given keys for the given volumes
         (or all volumes).
@@ -892,7 +1060,7 @@ class EXAConf:
 #}}}
  
 #{{{ Set database conf
-    def set_database_conf(self, config, database="all"):
+    def set_database_conf(self, config, database):
         """
         Changes the values of the given keys for the given databases
         (or all databases).
@@ -1006,11 +1174,22 @@ class EXAConf:
 #{{{ Get cored port
     def get_cored_port(self):
         """
-        Returns the network port used by the 'Cored' daemon.
+        Returns the port number used by the 'Cored' daemon.
         """
         return self.config["Global"]["CoredPort"]
 #}}}
-
+ 
+#{{{ Get ssh port
+    def get_ssh_port(self):
+        """
+        Returns the port number used by the SSH daemon (introduced in version 6.0.7).
+        """
+        if "SSHPort" in self.config["Global"].scalars:
+            return self.config["Global"]["SSHPort"]
+        else:
+            return self.def_ssh_port
+#}}}
+ 
 #{{{ Get license file
     def get_license_file(self):
         """
@@ -1141,6 +1320,10 @@ class EXAConf:
                                 data_dev_host = os.path.join(path, dev) + self.data_dev_suffix
                                 data_dev_container = os.path.join(self.container_root, self.storage_dir, dev + self.data_dev_suffix)
                                 disk_conf.mapped_devices.append((data_dev_host, data_dev_container))
+                        if "DirectIO" in disk_sec.scalars:
+                            disk_conf.direct_io = disk_sec.as_bool("DirectIO")
+                        else:
+                            disk_conf.direct_io = True
                         node_conf.disks[disk_conf.name] = disk_conf
                 # optional node values
                 if "DockerVolume" in node_sec.scalars:
@@ -1209,14 +1392,22 @@ class EXAConf:
                     # HIDDEN optional values:
                     if "BlockSize" in vol_sec.scalars:
                         conf.block_size = units2bytes(vol_sec["BlockSize"])
-                    elif conf.type == "data":
-                        conf.block_size = 4096
-                    elif conf.type == "archive":
-                        conf.block_size = 65536
+                    else:
+                        if conf.type == "data":
+                            conf.block_size = self.def_vol_block_size
+                        elif conf.type == "archive":
+                            conf.block_size = self.def_arch_vol_block_size
+                        else:
+                            raise EXAConfError("Found invalid volume type '%s'!" % conf.type)
                     if "StripeSize" in vol_sec.scalars:
                         conf.stripe_size = units2bytes(vol_sec["StripeSize"])
                     else:
-                        conf.stripe_size = conf.block_size * 64
+                        if conf.type == "data":
+                            conf.stripe_size = self.def_vol_stripe_size
+                        elif conf.type == "archive":
+                            conf.stripe_size = self.def_arch_vol_stripe_size
+                        else:
+                            raise EXAConfError("Found invalid volume type '%s'!" % conf.type)
                 # remote volume
                 elif conf.type == "remote":
                     conf.url = vol_sec["URL"].strip()
@@ -1250,6 +1441,29 @@ class EXAConf:
                 # optional values:
                 if "Params" in db_sec.scalars:
                     conf.params = db_sec["Params"]
+                # JDBC
+                conf["jdbc"] = config()
+                if "JDBC" in db_sec.sections:
+                    jdbc_sec = db_sec["JDBC"]
+                    conf.jdbc.bucketfs = jdbc_sec["BucketFS"]
+                    conf.jdbc.bucket = jdbc_sec["Bucket"]
+                    conf.jdbc.dir = jdbc_sec["Dir"]
+                else:
+                    conf.jdbc.bucketfs = self.def_bucketfs
+                    conf.jdbc.bucket = self.def_bucket
+                    conf.jdbc.dir = self.def_jdbc_driver_dir
+                # Oracle
+                conf["oracle"] = config()
+                if "Oracle" in db_sec.sections:
+                    oracle_sec = db_sec["Oracle"]
+                    conf.oracle.bucketfs = oracle_sec["BucketFS"]
+                    conf.oracle.bucket = oracle_sec["Bucket"]
+                    conf.oracle.dir = oracle_sec["Dir"]
+                else:
+                    conf.oracle.bucketfs = self.def_bucketfs
+                    conf.oracle.bucket = self.def_bucket
+                    conf.oracle.dir = self.def_oracle_driver_dir
+                # add current database    
                 db_configs[db_name] = conf
         return self.filter_configs(db_configs, filters)
 #}}}
@@ -1308,6 +1522,17 @@ class EXAConf:
         return ssl_config
 #}}}
 
+#{{{Get nameservers
+    def get_nameservers(self):
+        """
+        Returns the list of nameservers or an empty list, if there are none.
+        """
+        res = []
+        if "NameServers" in self.config["Global"]:
+            res = [ x.strip() for x in self.config["Global"]["NameServers"].split(",") if x.strip() != "" ]
+        return res
+#}}}
+
 #{{{ Filter configs
     def filter_configs(self, configs, filters):
         """
@@ -1323,6 +1548,35 @@ class EXAConf:
                     del configs[item[0]]
                     break
         return configs
+#}}}
+
+#{{{ Merge node UUIDs
+    def merge_node_uuids(self, exaconf_list):
+        """
+        Merges the node UUIDs of the EXAConf instances in the given list into this EXAConf instance. 
+        Done by replacing all UUIDs with value "IMPORT" in this instance with the UUID of the same
+        node in another instance (if that UUID is not "IMPORT"). 
+
+        Throws an exception if different UUIDs are found for the same node.
+        """
+
+        for section in self.config.sections:
+            if self.is_node(section):
+                node_sec = self.config[section]
+                nid = self.get_section_id(section)
+                for exaconf in exaconf_list:
+                    other_nodes = exaconf.get_nodes_conf()
+                    if nid in other_nodes.keys():
+                        other_node = other_nodes[nid]
+                        # a.) copy UUID from other node
+                        if node_sec["UUID"] == "IMPORT" and other_node.uuid != "IMPORT":
+                            node_sec["UUID"] = other_node.uuid
+                        # b.) compare UUIDs
+                        elif node_sec["UUID"] != "IMPORT" and other_node.uuid != "IMPORT":
+                            if node_sec["UUID"] != other_node.uuid:
+                                raise EXAConfError("Node %s has different UUIDs: '%s' (current) and '%s' (other)." % (nid, node_sec["UUID"], other_node.uuid))
+        self.commit()
+
 #}}}
 
 ##############################  DOCKER EXCLUSIVE STUFF ##################################

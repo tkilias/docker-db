@@ -1,10 +1,46 @@
 #! /bin/bash
  
-BINARY="docker"
-if (( $# > 0 )); then
-    BINARY="$1"
-fi
+DOCKER="$(which docker)"
 VOLUME="exa_basic_sc_test_volume"
+IMAGE="exasol/docker-db-dev:latest"
+  
+usage() {
+    echo "Usage: $0 [-i IMAGE] [-D DOCKER CMD]"
+    echo "Parameters:"
+    echo "-i    : Docker image to use for the test (default: '$IMAGE')."
+    echo "-D    : Docker command (default: '$DOCKER')."
+}
+   
+log() { 
+    echo "[$(basename ${0})]: ${*}"
+}
+     
+die() { 
+    log "FATAL: ${*}"
+    exit 1
+}
+ 
+# parse parameters
+while getopts "i:D:h" opt; do
+    case "$opt" in
+        i)
+            IMAGE="$OPTARG"
+            log "INFO:: Using image '$IMAGE'."
+            ;;
+        D)
+            DOCKER="$OPTARG"
+            log "INFO:: Using Docker command '$DOCKER'."
+            ;;
+        h)
+            usage
+            exit 0
+            ;;
+        ?)
+            usage
+            exit 1
+            ;;
+    esac
+done
  
 wait_start() {
     echo -n "Waiting for container $1 to start... "
@@ -16,41 +52,42 @@ wait_start() {
     return 0
 }
 
+"$DOCKER" pull "$IMAGE" # does not work with local built dev-images
 set -e
-echo "=== Starting self-contained basic test ==="
-echo "Creating container without a persistent volume"
-CONTAINER=$("$BINARY" run --detach --privileged exasol/docker-db:latest) &&
+log "=== Starting self-contained basic test ==="
+log "Creating container without a persistent volume"
+CONTAINER=$("$DOCKER" run --detach --privileged "$IMAGE") &&
 wait_start "$CONTAINER" 
 echo "Testing exaplus functionality"
-"$BINARY" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
+"$DOCKER" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
 echo "Creating a file within the container"
-"$BINARY" exec "$CONTAINER" touch /exa/my_file
+"$DOCKER" exec "$CONTAINER" touch /exa/my_file
 echo "Stopping the container"
-"$BINARY" stop -t 60 "$CONTAINER"
+"$DOCKER" stop -t 60 "$CONTAINER"
 echo "Restarting the container"
-"$BINARY" start "$CONTAINER"
+"$DOCKER" start "$CONTAINER"
 wait_start "$CONTAINER"
 echo -n "Checking if the file still exists... "
-if [[ -z $("$BINARY" exec "$CONTAINER" find /exa -name my_file) ]]; then
+if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
     echo "File-check failed!"
     exit 1
 else
     echo "successful!"
 fi
 echo "Stopping and deleting the container"
-"$BINARY" stop "$CONTAINER"
-"$BINARY" rm "$CONTAINER"
-echo "Creating a new container with a persistent volume"
-if [[ ! -z $("$BINARY" volume ls | grep "$VOLUME") ]]; then
-    "$BINARY" volume rm "$VOLUME"
+"$DOCKER" stop "$CONTAINER"
+"$DOCKER" rm "$CONTAINER"
+log "Creating a new container with a persistent volume"
+if [[ ! -z $("$DOCKER" volume ls | grep "$VOLUME") ]]; then
+    "$DOCKER" volume rm "$VOLUME"
 fi
-CONTAINER=$("$BINARY" run --detach --privileged -v $VOLUME:/exa exasol/docker-db:latest) &&
+CONTAINER=$("$DOCKER" run --detach --privileged -v $VOLUME:/exa "$IMAGE") &&
 wait_start "$CONTAINER" 
 
 #TODO : test db persistency with exaplus (also DELETE the container before restarting it)
 
 echo "Stopping and deleting the container"
-"$BINARY" stop "$CONTAINER"
-"$BINARY" rm "$CONTAINER"
-"$BINARY" volume rm "$VOLUME"
-echo "=== Successful! ==="
+"$DOCKER" stop "$CONTAINER"
+"$DOCKER" rm "$CONTAINER"
+"$DOCKER" volume rm "$VOLUME"
+log "=== Successful! ==="

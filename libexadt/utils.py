@@ -113,6 +113,53 @@ def get_first_interface(timeout=1):
         time.sleep(1)
         time_elapsed += 1
 #}}}
+
+#{{{ Get all interfaces
+def get_all_interfaces(timeout=1, up_only=True):
+    """
+    Returns a list of tuples of all interfaces in state UP (if 'up_only' is True).
+    Retries until at least one interface is found or the given time (in seconds) has elapsed.
+    """
+
+    interfaces = []
+    found_if = False
+    time_elapsed = 0
+    while len(interfaces) == 0 and time_elapsed < timeout:
+        iface = 'N/A'
+        address = 'N/A'
+        state = 'N/A'
+        output = subprocess.check_output(['/usr/bin/env', 'ip', 'addr'])
+        for line in output.splitlines():
+            line = line.strip()
+            # found an interface 
+            # -> remember state and address
+            if 'state UP' in line:
+                found_if = True
+                state = 'UP'
+                iface = line.split(':')[1].strip()
+            elif up_only is False and 'state DOWN' in line:
+                found_if = True
+                state = 'DOWN'
+                iface = line.split(':')[1].strip()
+            # extract and remember inet address 
+            # --> usually 3 lines down
+            if 'inet' in line and found_if is True:
+                address = line.split(' ')[1].strip()   
+                # append the new interface
+                interfaces.append((iface, address, state))
+                # reset local values
+                # -> the next line with 'state UP' or 'state DOWN' has to be checked again
+                found_if = False
+                iface = 'N/A'
+                address = 'N/A'
+                state = 'N/A'
+        # no interface found yet
+        if len(interfaces) == 0:
+            time.sleep(1)
+            time_elapsed += 1             
+
+    return interfaces
+#}}}
  
 #{{{ Rotate file
 def rotate_file(current, max_copies):
