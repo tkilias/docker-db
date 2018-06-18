@@ -5,13 +5,13 @@ from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, docker
 import shutil
 from libexadt.EXAConf import config
 
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.8/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.8/share/exaoperation')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.10/lib')
+#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.10/share/exaoperation')
 
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.0.8"
+my_version = "6.0.10"
 info_arc_prefix = "exasol_docker_info"
 
 #{{{ static variables for the "self contained image"
@@ -470,7 +470,7 @@ def init_sc(cmd):
         exaconf.config.write(outfile=sys.stdout)
         sys.exit(0)
     else:
-        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.8/libexec/exainit.py'
+        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.10/libexec/exainit.py'
         log_err("exadt:: calling '%s'" % exainit_cmd)
         os.execl(exainit_cmd, exainit_cmd)
 #}}}
@@ -490,6 +490,16 @@ def create_node_dirs(node_root, exaconf):
         os.makedirs(os.path.join(node_root, exaconf.spool_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.sync_dir)):
         os.makedirs(os.path.join(node_root, exaconf.sync_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.job_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.job_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.job_queue_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.job_queue_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.job_run_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.job_run_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.job_finish_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.job_finish_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.job_archive_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.job_archive_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.ssl_dir)):
         os.makedirs(os.path.join(node_root, exaconf.ssl_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):

@@ -65,7 +65,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.8"
+        self.version = "6.0.10"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -83,6 +83,12 @@ class EXAConf:
         self.tmp_dir = "tmp"
         self.spool_dir = "spool"
         self.sync_dir = "spool/sync"
+        self.job_dir = "spool/jobs"
+        self.job_queue_dir = "spool/jobs/queue"
+        self.job_run_dir = "spool/jobs/run"
+        self.job_finish_dir = "spool/jobs/finish"
+        self.job_archive_dir = "spool/jobs/archive"
+        self.job_id_file = "next.id"
         self.ssl_dir = "etc/ssl"
         self.md_dir = "metadata"
         self.md_storage_dir = "metadata/storage"
@@ -161,9 +167,9 @@ class EXAConf:
         second = second.split("-")[0]
         # now compare the digits, starting from left (i. e. major version)
         for (f,s) in zip(first.split("."), second.split(".")):
-            if f < s:
+            if int(f) < int(s):
                 return -1
-            elif f > s:
+            elif int(f) > int(s):
                 return 1
         return 0
 #}}}
@@ -552,11 +558,14 @@ class EXAConf:
             docker_sec["RootDir"] = self.root
             docker_sec["Image"] = image
             docker_sec["DeviceType"] = device_type
+            docker_sec["AdditionalVolumes"] = ""
             # comments
             self.config.comments["Docker"] = ["\n","Docker related options"]
             docker_sec.comments["RootDir"] = ["The directory that contains all data related to this docker cluster","(except for mapped devices)"]
             docker_sec.comments["Image"] = ["The EXASOL docker image used for all containers of this cluster"]
             docker_sec.comments["DeviceType"] = ["The type of storage devices for this cluster: 'block' or 'file'"]
+            docker_sec.comments["AdditionalVolumes"] = ["Comma-separated list of volumes to be mounted in all containers (e. g. '/mnt/my_data:/exa/my_data:rw' )",
+                    "These user-defined volumes are mounted additionally to the internal ones (like the node root volume)"]
 
         # Node sections
         for node in range (1, num_nodes+1):
@@ -1659,5 +1668,9 @@ class EXAConf:
             conf.network_mode = docker_sec["NetworkMode"]
         else:
             conf.network_mode = self.def_docker_network_mode
+        if "AdditionalVolumes" in docker_sec.scalars and docker_sec["AdditionalVolumes"] != "":
+            conf.additional_volumes = [v.strip() for v in docker_sec["AdditionalVolumes"].split(",") if v.strip() != ""]
+        else:
+            conf.additional_volumes = []
         return conf
 #}}}

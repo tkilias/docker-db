@@ -21,7 +21,7 @@ class docker_handler:
         """
         Creates a new docker_handler and a docker.APIClient (used for communication with the docker service).
         """
-        self.client = docker.APIClient(timeout=20, **kwargs_from_env())
+        self.client = docker.APIClient(timeout=120, **kwargs_from_env())
         self.verbose = verbose
         self.quiet = quiet
         if self.quiet:
@@ -326,6 +326,10 @@ class docker_handler:
                     bfs_container = os.path.join(self.exaconf.container_root, self.exaconf.bucketfs_dir, bfs_name)
                     binds.append(bfs_host + ":" + bfs_container + ":rw")
                     volumes.append(bfs_container)
+            # e. Additional volumes
+            for v in docker_conf.additional_volumes:
+                binds.append(v)
+                volumes.append(v.split(":")[1].strip())
 
             # port bindings
             port_binds = {}
