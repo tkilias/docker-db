@@ -12,7 +12,56 @@ Currently supported features:
 - update the virtual cluster
 - create backups on archive volumes
 
-# How to use this image
+# Table of contents
+[Requirements](#requirements)
+
+[Using the EXASOL Docker tool (`exadt`)](#using-the-exasol-docker-tool)
+
+[Creating a stand-alone EXASOL container (`docker run`)](#creating-a-stand-alone-exasol-container)
+
+[Creating a multi-host EXASOL cluster (by connecting multiple containers)](#creating-a-multi-host-exasol-cluster)
+
+[Installing custom JDBC drivers](#installing-custom-jdbc-drivers)
+
+[Installing Oracle drivers](#installing-oracle-drivers)
+
+[Troubleshooting](#troubleshooting)
+
+[Reporting bugs](#reporting-bugs)
+
+
+# Requirements
+ 
+## Docker
+
+`exadt` and the EXASOL Docker image have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 3.2.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
+ 
+**NOTE: docker-py version 2.3.0 contains a known bug that prevents exadt from starting containers.**
+
+Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
+ 
+## Host OS
+
+`exadt` currently only supports Docker on Linux. If you are using a Windows host you'd have to create a Linux VM.
+
+The host OS must support O_DIRECT access for the EXASOL containers, which may not be the case for Docker on Mac (see [Troubleshooting](#troubleshooting)).
+
+## Host environment
+
+If you like to use our `exadt` tool, you'll need to install `git` and `pipenv`. `pipenv` is used to create virtual environments for Python projects (see [https://docs.pipenv.org/](https://docs.pipenv.org/)). Using `pipenv` makes it easy to install the required versions of all `exadt` dependencies without affecting your host environment. You can install `pipenv` using `pip` or your favorite package management system.                 
+
+Each database instance needs **2 GiB RAM**. We recommend that the host reserves at least **4 GiB RAM** for each running EXASOL container.
+
+
+# Using the EXASOL Docker Tool
+
+The `exadt` command-line tool is used to create, initialize, start, stop, update and delete a Docker based EXASOL cluster.
+
+**NOTE: exadt currently only supports single-host-clusters. See [Creating a multi-host EXASOL cluster](#creating-a-multi-host-exasol-cluster) for how to create a multi-host-cluster (with one container per host).**
+ 
+## 0. Preliminaries
+
+The installation steps below assume that you have `pipenv` installed on your Docker host system.
 
 - Pull the image to your Docker host:
   ```console
@@ -25,16 +74,16 @@ Currently supported features:
   ```
 - Install the `exadt` dependencies:
   ```console
-  $ pip install --upgrade -r exadt_requirements.txt
+  $ pipenv install -r exadt_requirements.txt
+  ```
+- Activate the `pipenv` environment
+  ```console
+  $ pipenv shell
   ```
 - Create and configure your virtual EXASOL cluster by using the commands described in the `exadt` documentation below.
 
-# EXASOL Docker Tool — `exadt`
-
-The `exadt` command-line tool is used to create, initialize, start, stop, update and delete a Docker based EXASOL cluster.
-
-**NOTE: exadt currently only supports single-host-clusters. See below for how to create a multi-host-cluster (with one container per host).**
-
+**IMPORTANT** : all `exadt` commands listed below have to be executed within the shell spawned by the `pipenv shell` command! Alternatively, you can use `pipenv run ./exadt`.
+ 
 ## 1. Creating a cluster
 
 Select a root directory for your EXASOl cluster. It will be used to store the data, metadata and buckets of all local containers and should therefore be located on a filesystem with sufficient free space (min. 10 GiB are recommended).
@@ -189,8 +238,8 @@ A cluster can be updated by exchanging the EXASOL Docker image (but it has to be
 
 ```console
 $ git pull
-$ pip install --upgrade -r exadt_requirements.txt
 $ docker pull exasol/docker-db:latest
+$ pipenv install -r exadt_requirements.txt
 $ ./exadt update-cluster --image exasol/docker-db:latest MyCluster
 Cluster 'MyCluster' has been successfully updated!
 - Image :  exasol/docker-db:6.0.0-d1 --> exasol/docker-db:6.0.0-d2
@@ -217,6 +266,7 @@ Successfully removed cluster 'MyCluster'.
 Note that all file devices (even the mapped ones) and the root directory are deleted. You can use `--keep-root` and `--keep-mapped-devices` in order to prevent this.
 
 A cluster has to be stopped before it can be deleted (even if all containers are down)!
+
 
 # Creating a stand-alone EXASOL container
 
@@ -250,13 +300,12 @@ Or from outside the container:
 $ docker exec -ti exasoldb dwad_client stop-wait DB1
 ```
 
-
 ## Updating the persistent volume of a stand-alone EXASOL container
 
 Starting with version 6.0.3-d1, an existing persistent volume can be updated (for use with a later version of an EXASOL image) by calling the following command with the *new* image:
 
 ```console
-$ docker run -v exa_volume:/exa exasol/docker-db:6.0.3-d1 update-sc
+$ docker run --rm -v exa_volume:/exa exasol/docker-db:6.0.3-d1 update-sc
 ```
 
 If everything works correctly, you should see output similar to this:
@@ -270,6 +319,7 @@ Container has been successfully updated!
 ```
 
 After that, a new container can be created (from the new image) using the old / updated volume.
+
 
 # Creating a multi-host EXASOL cluster
 
@@ -288,6 +338,8 @@ $ docker run -v $HOME/exa_template:/exa --rm -i exasol/docker-db:latest init-sc 
 ```
 
 After the command has finished, the directory `$HOME/exa_template` contains all subdirectories as well as an EXAConf template (in `/etc`). The EXAConf is also printed to stdout.
+
+**NOTE: you man need to add `--privileged` if the host directory belongs to root.
  
 ### b. Create an EXAConf template
 
@@ -372,6 +424,7 @@ $ docker run --detach --network=host --privileged -v $HOME/exa_template:/exa exa
 
 **NOTE: this example uses the host network stack, i. e. the containers are directly accessing a host interface to connect to each other. There is no need to expose ports in this mode: they are all accessible on the host.**
 
+
 # Installing custom JDBC drivers
 
 Starting with version 6.0.7-d1, custom JDBC drivers can be added by uploading them into a bucket. The bucket and path for the drivers can be configured in each database section of EXAConf. The default configuration is:
@@ -406,6 +459,7 @@ Change the variables DRIVERNAME, JAR, DRIVERMAIN and PREFIX according to your dr
 
 If you use the default bucket and the default path, you can add multiple JDBC drivers during runtime. The DB will find them without having to restart it (as long as they're located in a subfolder of the default path). Otherwise, a container restart is required. 
  
+
 # Installing Oracle drivers
 
 Starting with version 6.0.7-d1, Oracle drivers can be added by uploading them into a bucket. The bucket and path for the drivers can be configured in each database section of EXAConf. The default configuration is:
@@ -437,6 +491,7 @@ $ awk '/WritePasswd/{ print $3; }' EXAConf | base64 -d
 
 **NOTE: The only currently supported driver version is 12.1.0.20. Please download the package `instantclient-basic-linux.x64-12.1.0.2.0.zip` from oracle.com and upload it as described above.**
  
+
 # Troubleshooting
 
 ### Error after modifying EXAConf
@@ -453,7 +508,6 @@ In order to solve the problem you have to set the checksum within EXAConf to 'CO
 Checksum = COMMIT
 ...
 ```
-
 ### Error during container start because of missing O_DIRECT support
 
 > WORKER::ERROR: Failed to open device '/exa/data/storage/dev.1.data'!
@@ -472,6 +526,13 @@ We strongly recommend to use only Linux for the EXASOL Docker image. If you are 
 
 **This feature is experimental and may cause significantly higher memory usage and fluctuating I/O throughput!**
 
+### Error when starting the database
+
+> Could not start database: system does not have enough active nodes or DWAd was not able to create startup parameters for system
+
+If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB per node (that's also the default value in EXAConf).
+
+
 # Reporting bugs
 
 Please report bugs that are specifically related to the **dockerized** EXASOL DB at [Github](https://github.com/EXASOL/docker-db/issues).
@@ -489,15 +550,3 @@ Also try to answer the following questions in your bug report:
 * What did you expect to happen?
 * What actually happened?
 
-# Supported Docker versions
-
-`exadt` and the EXASOL Docker image have been developed and tested with Docker 17.09.0-ce (API 1.32) and docker-py 2.6.1. It may also work with earlier versions, but that is not guaranteed.
- 
-**NOTE: docker-py version 2.3.0 contains a known bug that prevents exadt from starting containers.**
-
-Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
- 
-# Supported OS
-
-`exadt` currently only supports Docker on Linux (tested with Fedora). If you are using a Windows host you'd have to create a Linux VM.
- 
