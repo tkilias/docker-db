@@ -412,7 +412,7 @@ $ touch $HOME/exa_template/data/storage/dev.1.meta
 
 This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data and also a file that holds the metadata for that device. Adjust the size to your needs. 
 
-**NOTE: Alternatively you can partition a block-device (the meta partition needs only 2 MB) and place symlinks (or new device files) named `dev.1.data` and `dev.1.meta` in the same directory.**
+**NOTE: Alternatively you can partition a block-device (the meta partition needs only 2 MB) and create device files (using `mknod`) named `dev.1.data` and `dev.1.meta` in the same directory.**
  
 ## 5. Start the cluster
 
