@@ -530,7 +530,7 @@ We strongly recommend to use only Linux for the EXASOL Docker image. If you are 
 
 > Could not start database: system does not have enough active nodes or DWAd was not able to create startup parameters for system
 
-If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB per node (that's also the default value in EXAConf).
+If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB RAM per node (that's also the default value in EXAConf).
 
 
 # Reporting bugs
