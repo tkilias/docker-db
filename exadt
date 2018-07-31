@@ -1,18 +1,16 @@
 #! /usr/bin/env python2.7
 
 import sys, os, argparse, pprint, subprocess, time, tarfile, io, docker
-from libexadt import exadt_conf, EXAConf, docker_handler, device_handler, docker_rpc_handler, utils 
+from libexadt import exadt_conf, docker_handler, device_handler, docker_rpc_handler, EXAConf, utils
 import shutil
 from libexadt.EXAConf import config
-
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.10/lib')
-#sys.path.insert(0, '/usr/opt/EXASuite-6/EXAClusterOS-6.0.10/share/exaoperation')
 
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.0.10"
+my_version = "6.0.11"
 info_arc_prefix = "exasol_docker_info"
+confirm_yes = False
 
 #{{{ static variables for the "self contained image"
 sc_root = "/exa"
@@ -48,6 +46,8 @@ def confirm(msg):
     """
     Asks the user for confirmation.
     """
+    if confirm_yes:
+        return True
 
     choice = ""
     while choice not in set(['y','Y','n','N']):
@@ -470,7 +470,7 @@ def init_sc(cmd):
         exaconf.config.write(outfile=sys.stdout)
         sys.exit(0)
     else:
-        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.10/libexec/exainit.py'
+        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.11/libexec/exainit.py'
         log_err("exadt:: calling '%s'" % exainit_cmd)
         os.execl(exainit_cmd, exainit_cmd)
 #}}}
@@ -1062,9 +1062,16 @@ def collect_info(cmd):
 
 # {{{ Main
 def main():
+    global confirm_yes
+    
     parser = argparse.ArgumentParser(
             description = 'EXASOL Docker Tool',
             prog = 'exadt')
+    parser.add_argument(
+            '--yes', '-y',
+            action='store_true',
+            default=False,
+            help='Do not ask for confirmations')
     cmdparser = parser.add_subparsers(
             title = 'commands',
             description = 'supported commands')
@@ -1072,66 +1079,66 @@ def main():
     # create cluster command
     parser_cc = cmdparser.add_parser(
             'create-cluster',
-            help='create a new cluster')
+            help='Create a new cluster')
     parser_cc.add_argument(
             'cluster', type=str, metavar='NAME',
-            help='a name for the new cluster')
+            help='Name for the new cluster')
     parser_cc.add_argument(
             '--root', '-r',
             required = True,
-            help='the root directory for the new cluster')
+            help='Root directory for the new cluster')
     parser_cc.add_argument(
             '--create-root', '-c',
             action = 'store_true',
-            help='create root directory if it does not exist')
+            help='Create root directory if it does not exist')
     parser_cc.set_defaults(func=create_cluster)
    
     # delete cluster command
     parser_dc = cmdparser.add_parser(
             'delete-cluster',
-            help='delete an existing cluster from the config (and clear data in its root directory)')
+            help='Delete an existing cluster from the config (and clear data in its root directory)')
     parser_dc.add_argument(
             'cluster', type=str, metavar='CLUSTER',
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_dc.add_argument(
             '--keep-root', '-k',
             action = 'store_true',
-            help='keep root directory and contents (default: delete it)')
+            help='Keep root directory and contents (default: delete it)')
     parser_dc.add_argument(
             '--keep-mapped-devices', '-d',
             action = 'store_true',
-            help='keep mapped devices, i. e. file-devices outside of the root directory (default: delete them)')
+            help='Keep mapped devices, i. e. file-devices outside of the root directory (default: delete them)')
     parser_dc.set_defaults(func=delete_cluster)
  
     # init cluster command
     parser_ic = cmdparser.add_parser(
             'init-cluster',
-            help='initialize the configuration and directory structure of a cluster')
+            help='Initialize the configuration and directory structure of a cluster')
     parser_ic.add_argument(
             'cluster', type=str, metavar='CLUSTER',
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_ic.add_argument(
             '--image', '-i',
             required = True,
-            help='docker image to use')
+            help='Docker image to use')
     parser_ic.add_argument(
             '--num-nodes', '-m',
             type = int,
             default = 1,
-            help = 'nr. of nodes (i. e. containers, default: 1)')
+            help = 'Nr. of nodes (i. e. containers, default: 1)')
     parser_ic.add_argument(
             '--license', '-l',
             required = True,
-            help = 'path to the license file')
+            help = 'Path to the license file')
     parser_ic.add_argument(
             '--device-type', '-d',
             type = str,
             default = 'file',
-            help = 'the type of EXAStorage device (block | file)')
+            help = 'Type of EXAStorage device (block | file)')
     parser_ic.add_argument(
             '--auto-storage', '-a',
             action = 'store_true',
-            help = "automatically create file-devices, disks and volumes (requires sufficient free space in the root directory and only works for device-type 'file')")
+            help = "Automatically create file-devices, disks and volumes (requires sufficient free space in the root directory and only works for device-type 'file')")
     parser_ic.add_argument(
             '--db-version', '-D',
             type = str,
@@ -1143,36 +1150,36 @@ def main():
     parser_ic.add_argument(
             '--img-version', '-I',
             type = str,
-            help='image version number')
+            help='Image version number')
     parser_ic.add_argument(
             '--force', '-f',
             action = 'store_true',
-            help='force re-initialization of the root directory (if not empty)')
+            help='Force re-initialization of the root directory (if not empty)')
     parser_ic.set_defaults(func=init_cluster)
   
     # init-sc command
     parser_isc = cmdparser.add_parser(
             'init-sc',
-            help='initialize the container of a self-contained image') 
+            help='Initialize the container of a self-contained image') 
     parser_isc.add_argument(
             '--template', '-t',
             default = False,
             action = 'store_true',
-            help="print an EXAConf template and exit (also prepares '/exa')")
+            help="Print an EXAConf template and exit (also prepares '/exa')")
     parser_isc.add_argument(
             '--node-id', '-i',
             type = str,
             default = '11',
-            help='node ID of the current container')
+            help='Node ID of the current container')
     parser_isc.add_argument(
             '--num-nodes', '-n',
             type = int,
             default = 1,
-            help='number of cluster nodes')
+            help='Number of cluster nodes')
     parser_isc.add_argument(
             '--img-version', '-I',
             type = str,
-            help='version number of the new Docker image')
+            help='Version number of the new Docker image')
     parser_isc.add_argument(
             '--db-version', '-D',
             type = str,
@@ -1186,20 +1193,20 @@ def main():
     # list clusters command
     parser_lc = cmdparser.add_parser(
             'list-clusters',
-            help='list all existing clusters and their root directory')
+            help='List all existing clusters and their root directory')
     parser_lc.set_defaults(func=list_clusters)
     
     # update cluster command
     parser_upc = cmdparser.add_parser(
             'update-cluster',
-            help='update given cluster (by changing the docker image)')
+            help='Update given cluster (by changing the docker image)')
     parser_upc.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster to be updated')
+            help='Name of the cluster to be updated')
     parser_upc.add_argument(
             '--image', '-i',
             required=True,
-            help='name of the new Docker image')
+            help='Name of the new Docker image')
     parser_upc.add_argument(
             '--db-version', '-D',
             type = str,
@@ -1211,17 +1218,17 @@ def main():
     parser_upc.add_argument(
             '--img-version', '-I',
             type = str,
-            help='version number of the new Docker image')
+            help='Version number of the new Docker image')
     parser_upc.set_defaults(func=update_cluster)
      
     # update-sc command
     parser_usc = cmdparser.add_parser(
             'update-sc',
-            help='update the container of a self-contained image')
+            help='Update the container of a self-contained image')
     parser_usc.add_argument(
             '--img-version', '-I',
             type = str,
-            help='version number of the new Docker image')
+            help='Version number of the new Docker image')
     parser_usc.add_argument(
             '--db-version', '-D',
             type = str,
@@ -1235,176 +1242,177 @@ def main():
     # start cluster command
     parser_sc = cmdparser.add_parser(
             'start-cluster',
-            help='start given cluster')
+            help='Start given cluster')
     parser_sc.add_argument(
             'cluster', type=str, metavar='CLUSTER',
-            help='name of the cluster to be started')
+            help='Name of the cluster to be started')
     parser_sc.add_argument(
             '--command', '-c',
-            help="custom start command for all containers (set as 'entrypoint')")
+            help="Custom start command for all containers (set as 'entrypoint')")
     parser_sc.add_argument(
             '--verbose', '-V',
             action = 'store_true',
-            help='increase output')
+            help='Increase output')
     parser_sc.set_defaults(func=start_cluster)
   
     # stop cluster command
     parser_stc = cmdparser.add_parser(
             'stop-cluster',
-            help='stop given cluster')
+            help='Stop given cluster')
     parser_stc.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster to be stopped')
+            help='Name of the cluster to be stopped')
     parser_stc.add_argument(
             '--timeout', '-t',
             default=60,
-            help='seconds to wait for a container to stop before sending SIGKILL (default: 60s)')
+            help='Seconds to wait for a container to stop before sending SIGKILL (default: 60s)')
     parser_stc.add_argument(
             '--verbose', '-V',
             action = 'store_true',
-            help='increase output')
+            help='Increase output')
     parser_stc.set_defaults(func=stop_cluster)
    
     # ps command
     parser_psc = cmdparser.add_parser(
             'ps',
-            help='list all containers of the given cluster')
+            help='List all containers of the given cluster')
     parser_psc.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_psc.add_argument(
             '--verbose', '-V',
             action = 'store_true',
-            help='dump all container info from docker')
+            help='Dump all container info from docker')
     parser_psc.set_defaults(func=ps)
      
     # create file devices command
     parser_cfdc = cmdparser.add_parser(
             'create-file-devices',
-            help='create files as storage devices for all nodes of the given cluster')
+            help='Create files as storage devices for all nodes of the given cluster')
     parser_cfdc.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_cfdc.add_argument(
             '--num', '-n',
             type = int,
             default = 1,
-            help='nr. of devices (per node) to be created')
+            help='Nr. of devices (per node) to be created')
     parser_cfdc.add_argument(
             '--size', '-s',
             required = True,
             type = str,
-            help='size of a device file')
+            help='Size of a device file')
     parser_cfdc.add_argument(
             '--disk', '-d',
             type = str,
             default = "default",
-            help="storage disk to which the device should be added (default: 'default')")
+            help="Storage disk to which the device should be added (default: 'default')")
     parser_cfdc.add_argument(
             '--path', '-p',
             type=str,
-            help='create device-files in given directory instead of default directory')
+            help='Create device-files in given directory instead of default directory')
     parser_cfdc.add_argument(
             '--replace', '-r',
             action='store_true',
-            help='replace existing file-devices instead of adding them')
+            help='Replace existing file-devices instead of adding them')
     parser_cfdc.set_defaults(func=create_file_devices)
  
     # docker version command
     parser_dv = cmdparser.add_parser(
             'docker-version',
-            help='print docker version information')
+            help='Print docker version information')
     parser_dv.set_defaults(func=docker_version)
     
     # exec command
     parser_ex = cmdparser.add_parser(
             'exec',
-            help='execute the given command on a running container of the given cluster')
+            help='Execute the given command on a running container of the given cluster')
     parser_ex.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_ex.add_argument(
             '--command', '-c',
-            help='command to be executed')
+            help='Command to be executed')
     parser_ex.add_argument(
             '--all', '-a',
             action='store_true',
-            help='execute the given command on all running containers')
+            help='Execute the given command on all running containers')
     parser_ex.add_argument(
             '--quiet', '-q',
             action='store_true',
             default=False,
-            help='suppress all output, except from the given command')
+            help='Suppress all output, except from the given command')
     parser_ex.set_defaults(func=execute)
      
     # start-db command
     parser_sadb = cmdparser.add_parser(
             'start-db',
-            help='start all databases (or the given one) in the given cluster')
+            help='Start all databases (or the given one) in the given cluster')
     parser_sadb.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_sadb.add_argument(
             '--name', '-n',
             type=str,
             default="all",
-            help='database to be started')
+            help='Database to be started')
     parser_sadb.set_defaults(func=start_database)
       
     # stop-db command
     parser_stdb = cmdparser.add_parser(
             'stop-db',
-            help='stop all databases (or the given one) in the given cluster')
+            help='Stop all databases (or the given one) in the given cluster')
     parser_stdb.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_stdb.add_argument(
             '--name', '-n',
             type=str,
             default="all",
-            help='database to be stopped')
+            help='Database to be stopped')
     parser_stdb.add_argument(
             '--kill', '-k',
             action='store_true',
             default=False,
-            help='force-stop DB immediately')
+            help='Force-stop DB immediately')
     parser_stdb.set_defaults(func=stop_database)
        
     # list-dbs command
     parser_lsdb = cmdparser.add_parser(
             'list-dbs',
-            help='list all databases in the given cluster')
+            help='List all databases in the given cluster')
     parser_lsdb.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_lsdb.add_argument(
             '--short', '-s',
             action='store_true',
             default=False,
-            help='short listing (only names)')
+            help='Short listing (only names)')
     parser_lsdb.set_defaults(func=list_databases)
        
     # version command
     parser_ver = cmdparser.add_parser(
             'version',
-            help='print exadt version number')
+            help='Print exadt version number')
     parser_ver.set_defaults(func=print_version)
         
     # collect-info command
     parser_cl = cmdparser.add_parser(
             'collect-info',
-            help='collect log output and debugging information')
+            help='Collect log output and debugging information')
     parser_cl.add_argument(
             'cluster', type=str, metavar="CLUSTER",
-            help='name of the cluster')
+            help='Name of the cluster')
     parser_cl.add_argument(
             '--outfile', '-o',
             type=str,
             default="./exasol_info.tgz",
-            help='name of the output file')
+            help='Name of the output file')
     parser_cl.set_defaults(func=collect_info)
-   
+
     command = parser.parse_args()
+    if command.yes: confirm_yes = True
     command.func(command)
 
 if __name__ == '__main__':

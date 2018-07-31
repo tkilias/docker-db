@@ -1,4 +1,4 @@
-import sys, os, stat, ipaddr, configobj, StringIO, hashlib
+import sys, os, stat, ipaddr, configobj, StringIO, hashlib, re
 from utils import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid
 from collections import OrderedDict as odict
 
@@ -65,7 +65,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.10"
+        self.version = "6.0.11"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -99,7 +99,7 @@ class EXAConf:
         self.db_log_dir = "logs/db"
         self.docker_log_dir = "logs/docker"
         self.node_uuid = "etc/node_uuid"
-        self.supported_platforms = ['Docker', 'VM']
+        self.supported_platforms = ['docker', 'vm']
         self.def_cored_port = 10001
         self.def_ssh_port = 22
         self.def_bucketfs = "bfsdefault"
@@ -107,6 +107,7 @@ class EXAConf:
         self.def_db_port = 8888
         self.def_bucketfs_http_port = 6583
         self.def_bucketfs_https_port = 0
+        self.def_xmlrpc_port = 80
         self.def_docker_privileged = True
         self.def_docker_network_mode = "bridge"
         self.docker_logs_filename = "docker_logs"
@@ -484,7 +485,7 @@ class EXAConf:
         """
         Checks if the given platform is in the list of supported platforms.
         """
-        return platform in self.supported_platforms
+        return platform.lower() in self.supported_platforms
 #}}}
  
 #{{{ Is initialized
@@ -527,10 +528,11 @@ class EXAConf:
         glob_sec["Revision"] = "0"
         glob_sec["Checksum"] = "COMMIT"
         glob_sec["ClusterName"] = name
-        glob_sec["Platform"] = platform
+        glob_sec["Platform"] = platform.title()
         glob_sec["LicenseFile"] = os.path.abspath(license) if license else ""
         glob_sec["CoredPort"] = self.def_cored_port
         glob_sec["SSHPort"] = self.def_ssh_port
+        glob_sec["XMLRPCPort"] = self.def_xmlrpc_port
         glob_sec["Networks"] = "private"
         glob_sec["NameServers"] = ""
         glob_sec["ConfVersion"] = self.version
@@ -538,7 +540,7 @@ class EXAConf:
         glob_sec["DBVersion"] = self.db_version
         glob_sec["ImageVersion"] = self.img_version
         # comments
-        glob_sec.comments["Networks"] = ["The type of networks for this cluster: 'public', 'private' or both."]
+        glob_sec.comments["Networks"] = ["List of networks for this cluster: 'private' is mandatory, 'public' is optional."]
         glob_sec.comments["NameServers"] = ["Comma-separated list of nameservers for this cluster."]
 
         # SSL section
@@ -552,7 +554,7 @@ class EXAConf:
         ssl_sec.comments["Cert"] = ["The SSL certificate, private key and CA for all EXASOL services"]
 
         # Docker section
-        if platform == "Docker":
+        if platform.title() == "Docker":
             self.config["Docker"] = {}
             docker_sec = self.config["Docker"]
             docker_sec["RootDir"] = self.root
@@ -570,33 +572,8 @@ class EXAConf:
         # Node sections
         for node in range (1, num_nodes+1):
             node_id = self.max_reserved_node_id + node
-            node_section =  "Node : " + str(node_id)     
-            self.config[node_section] = {}
-            node_sec = self.config[node_section]
-            node_sec["PrivateNet"] = "10.10.10.%i/24" % node_id
-            node_sec["PublicNet"] = ""
-            node_sec["Name"] = "n" + str(node_id)
-            node_sec["UUID"] = gen_node_uuid()
-            # Add device template in template mode
-            if template_mode:
-                node_sec["Disk : default"] = {"Devices" : "dev.1 #'dev.1.data' and 'dev.1.meta' files must be located in '%s'" 
-                        % os.path.join(self.container_root, self.storage_dir)}
-            # Docker specific options:
-            if platform == "Docker":
-                node_sec["DockerVolume"] = "n" + str(node_id)
-                node_sec["ExposedPorts"] = str(self.def_db_port) + ":" + str(self.def_db_port + node_id)
-                if self.def_bucketfs_http_port > 0:
-                    node_sec["ExposedPorts"] +=  ", " + str(self.def_bucketfs_http_port) + ":" + str(self.def_bucketfs_http_port + node_id)
-                if self.def_bucketfs_https_port > 0:
-                    node_sec["ExposedPorts"] +=  ", " + str(self.def_bucketfs_https_port) + ":" + str(self.def_bucketfs_https_port + node_id)
-                # Docker comments
-                node_sec.comments["ExposedPorts"] = ["Ports to be exposed (container : host)"]
-            # other platfrom options
-            if platform == "VM":
-                node_sec["PrivateInterface"] = "eth0"
-                node_sec["PublicInterface"] = "eth1"
-            #comments
-            self.config.comments[node_section] = ["\n"]
+            self.add_node(nid = node_id, priv_net = "10.10.10.%i/24" % node_id, 
+                          template_mode = template_mode, commit = False)
 
         # EXAStorage sections
         self.config["EXAStorage"] = {}
@@ -737,8 +714,8 @@ class EXAConf:
         # public network is optional
         have_priv_net = self.has_priv_net()
         have_pub_net = self.has_pub_net()
-        if not have_priv_net and not have_pub_net:
-            raise EXAConfError("Neither private nor public network are enabled!")
+        if not have_priv_net:
+            raise EXAConfError("The private network is disabled! Please enable it and specify a private IP for each node.")
 
         # docker specific checks
         have_docker = (self.get_platform() == "Docker")
@@ -787,12 +764,10 @@ class EXAConf:
                 for section in node_sec.sections:
                     if self.is_disk(section):
                         disk_sec = node_sec[section]
-                        disk_name = self.get_section_id(section)
-                        disk_devices = [ d.strip() for d in disk_sec["Devices"].split(",") if d.strip() != "" ]
-                        if not disk_devices or len(disk_devices) == 0:
-                            raise EXAConfError("No devices specified for disk '%s' in section '%s'!" % (disk_name, section))
-                        # remember all disks and devices of the current node
-                        node_devices += disk_devices
+                        if "Devices" in disk_sec.scalars:
+                            disk_devices = [ d.strip() for d in disk_sec["Devices"].split(",") if d.strip() != "" ]
+                            # remember all disks and devices of the current node
+                            node_devices += disk_devices
                 # check for duplicate device names
                 dup = self.get_duplicates(node_devices)
                 if dup and len(dup) > 0:
@@ -926,124 +901,155 @@ class EXAConf:
             return False
         return pub
 #}}}
- 
-#{{{ Add node device
-    def add_node_device(self, node_id, disk, device, path):
-        """ 
-        Adds the given device as a storage device to the given node.
-        If 'path' is specified, a mapping is also added. 
+
+# {{{ Add node
+    def add_node(self, nid = None, priv_net = None, pub_net = None,
+                 template_mode = False, commit = True):
+        """
+        Adds a new node to the EXAConf. ID and name are determined automatically 
+        if 'nid' is None. 'priv_net' is mandatory, 'pub_net' is optional.
         """
 
-        node_section = "Node : " + str(node_id)
-        if node_section not in self.config.sections:
-            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_id = nid
+        if node_id is None:
+            node_id = self.get_curr_max_nid() + 1
+        elif self.node_id_exists(node_id):
+            raise EXAConfError("Node with ID %s already exists!" % str(node_id))
+
+        # sanity checks
+        if priv_net is None:
+            raise EXAConfError("The private network has to be specified when adding a node!")
+
+        # replace 'x' and 'X' in IP with the node ID
+        if priv_net != None:
+            priv_net = re.sub('[xX]+', str(node_id), priv_net)
+        if pub_net != None:
+            pub_net = re.sub('[xX]+', str(node_id), pub_net)
+
+        # create the node section
+        node_section =  "Node : " + str(node_id)     
+        self.config[node_section] = {}
         node_sec = self.config[node_section]
-        disk_sec_name = "Disk : " + disk
-        # get / create disk subsection
-        disk_sec = odict()
-        if disk_sec_name in node_sec.sections:
-            disk_sec = node_sec[disk_sec_name]
-        # add device
-        if "Devices" in disk_sec.keys():
-            disk_sec["Devices"] = disk_sec["Devices"] + ", " + device
-        else:
-            disk_sec["Devices"] = device
-        # add mapping
-        if path and path != "":
-            if "Mapping" in disk_sec.keys():
-                disk_sec["Mapping"] = disk_sec["Mapping"] + ", " + device + ":" + path
-            else:
-                disk_sec["Mapping"] = device + ":" + path
-        #  set modified section / new dict
-        node_sec[disk_sec_name] = disk_sec
+        node_sec["PrivateNet"] = priv_net if priv_net is not None else ""
+        node_sec["PublicNet"] = pub_net if pub_net is not None else ""
+        node_sec["Name"] = "n" + str(node_id)
+        node_sec["UUID"] = gen_node_uuid()
+        # Add device template in template mode (given device is ignored)
+        if template_mode:
+            node_sec["Disk : default"] = {"Devices" : "dev.1 #'dev.1.data' and 'dev.1.meta' files must be located in '%s'" 
+                    % os.path.join(self.container_root, self.storage_dir)}
+        # Docker specific options:
+        if self.get_platform() == "Docker":
+            node_sec["DockerVolume"] = "n" + str(node_id)
+            node_sec["ExposedPorts"] = str(self.def_db_port) + ":" + str(self.def_db_port + node_id)
+            if self.def_bucketfs_http_port > 0:
+                node_sec["ExposedPorts"] +=  ", " + str(self.def_bucketfs_http_port) + ":" + str(self.def_bucketfs_http_port + node_id)
+            if self.def_bucketfs_https_port > 0:
+                node_sec["ExposedPorts"] +=  ", " + str(self.def_bucketfs_https_port) + ":" + str(self.def_bucketfs_https_port + node_id)
+            # Docker comments
+            node_sec.comments["ExposedPorts"] = ["Ports to be exposed (container : host)"]
+        # other platform options
+        elif self.get_platform().upper() == "VM":
+            node_sec["PrivateInterface"] = "eth0"
+            node_sec["PublicInterface"] = "eth1"
+        #comments
+        self.config.comments[node_section] = ["\n"]    
 
+        if commit:
+            self.commit()
+# }}}
+
+# {{{ Remove node
+    def remove_node(self, nid, force  = False, commit = True):
+        """
+        Removes the given node from the EXAConf if it is not part of an EXAStorage volume
+        or a database (this check is skipped if 'force' is True).
+        """
+
+        if not self.node_id_exists(nid):
+            raise EXAConfError("Node '%s' can't be removed because it does not exist!" % str(nid))
+
+        if force is False:
+            usage = self.get_node_usage(nid)
+            if usage is not None:
+                raise EXAConfError("Node '%s' can't be removed because it's in use!" % str(nid))
+
+        del self.config["Node : %s" % str(nid)]
         self.commit()
-#}}}
-
-#{{{ Remove node devices
-    def remove_node_devices(self, node_id):
-        """ 
-        Removes ALL storage devices of the given node from EXAConf.
-        """
- 
-        node_section = "Node : " + str(node_id)
-        if node_section not in self.config.sections:
-            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
-        # use slice for in-place modification
-        for sect in tuple(self.config[node_section].sections):
-            if self.is_disk(sect):
-                del self.config[node_section][sect]
-        self.commit()
-#}}}
-  
-#{{{ Use disk for volumes
-    def use_disk_for_volumes(self, disk, bytes_per_node, vol_type=None, min_vol_size = None, vol_resize_step=None):
-        """
-        Adds the given disk to all volumes of the given type that don't have a disk assigned yet.         
-        The given 'bytes_per_node' space is distributed equally across all suitable volumes.
-        """
-
-        # we only consider volumes without disks
-        filters = {"disk": None}
-        if vol_type and vol_type != "":
-            filters["type"] = vol_type
-        volumes = self.get_storage_volumes(filters=filters)
-        bytes_per_volume_node = bytes_per_node / len(volumes)
-
-        for volume in volumes.iteritems():
-            vol_sec = self.config["EXAVolume : " + volume[0]]
-            vol_sec["Disk"] = disk
-            # decrease volume size to the next multiple of the vol_resize_step (if given)
-            if vol_resize_step and vol_resize_step > 0:
-                vol_size = bytes2units((vol_resize_step * (bytes_per_volume_node // vol_resize_step)) / volume[1].redundancy)
-                if units2bytes(vol_size) < vol_resize_step:
-                    vol_size = bytes2units(vol_resize_step)
-            else:
-                vol_size = bytes2units(bytes_per_volume_node / volume[1].redundancy)
-            # check size if given
-            if min_vol_size and units2bytes(vol_size) < min_vol_size:
-                raise EXAConfError("Can't assign disk to volume because resulting size '%s' is below min. size %s!" % (vol_size, bytes2units(min_vol_size)))
-            vol_sec["Size"] = vol_size
-
-        self.commit()
-#}}}
-
-#{{{ Set node network
-    def set_node_network(self, node_id, private=None, public=None):
-        """
-        Sets the private and / or public network of the given node. 
-        """
-
-        node_section = "Node : " + str(node_id)
-        if node_section not in self.config.sections:
-            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
-        node_sec = self.config[node_section]
-
-        if private and private != "":
-            if not self.net_is_valid(private):
-                raise EXAConfError("Private network '%s' is invalid!" % private)
-            node_sec["PrivateNet"] = private
-        if public and public != "":
-            if not self.net_is_valid(public):
-                raise EXAConfError("Public network '%s' is invalid!" % public)
-            node_sec["PublicNet"] = public
-
-        self.commit()
-#}}}
+# }}}
 
 #{{{ Set node conf
-    def  set_node_conf(self, config, node_id):
+    def set_node_conf(self, node_conf, node_id, remove_disks=False):
         """
-        Changes the values of the given keys for the given node 
-        (or all nodes).
+        Changes the values of the given keys for the given node (or all nodes). 
+        The node ID can't be changed. If 'remove_disks' is True, all disks
+        that are not part of the given node_conf will be deleted. Existing disks
+        will always be updated and new ones added.
+
+        If 'node_id' == 'all', the given node_confuration is applied to all nodes.
+        Take care to remove all options that should not be changed (e. g. the
+        network address).
+
+        If a node with the given ID does not exist, it will be added and the
+        given configuration will be applied. In that case the given 'node_conf'
+        must contain a valid 'private_net'!
         """
 
         nodes = self.get_nodes_conf()
-        for node in nodes.iteritems():
+        # add node first if it doesn't exist
+        if node_id not in nodes.keys():
+            self.add_node(nide = node_id, priv_net = node_conf.private_net, commit = False)
+            nodes = self.get_nodes_conf()
+        # change configuration for the given node(s)
+        for node in nodes.items():
             if node_id == "all" or node[0] == node_id:
                 node_sec = self.config["Node : " + str(node[0])]
-                if "uuid" in config.iterkeys():
-                    node_sec["UUID"] = str(config.uuid)
+                if "name" in node_conf.keys():
+                    node_sec["Name"] = node_conf.name
+                if "uuid" in node_conf.keys():
+                    node_sec["UUID"] = str(node_conf.uuid)
+                if "private_net" in node_conf.keys():
+                    node_sec["PrivateNet"] = node_conf.private_net
+                if "public_net" in node_conf.keys():
+                    node_sec["PublicNet"] = node_conf.public_net
+                if "private_ip" in node_conf.keys():
+                    if "PrivateNet" in node_sec.scalars and node_sec["PrivateNet"].strip() != "":
+                        node_sec["PrivateNet"] = "/".join([node_conf.private_ip, node_sec["PrivateNet"].split("/")[1]])
+                    else:
+                        raise EXAConfError("Public IP given for node %s but it has no public network!" % node_id)
+                if "public_ip" in node_conf.keys():
+                    if "PublicNet" in node_sec.scalars and node_sec["PublicNet"].strip() != "":
+                        node_sec["PublicNet"] = "/".join([node_conf.public_ip, node_sec["PublicNet"].split("/")[1]])
+                    else:
+                        raise EXAConfError("Public IP '%s' given for node %s but it has no public network!" % (node_conf.public_ip, node_id))
+                if "docker_volume" in node_conf.keys():
+                    node_sec["DockerVolume"] = os.path.basename(node_conf.docker_volume)
+                if "exposed_ports" in node_conf.keys():
+                    ports = ", ".join([":".join([str(p[0]), str(p[1])]) for p in node_conf.exposed_ports])
+                    node_sec["ExposedPorts"] = ports 
+                if "private_interface" in node_conf.keys():
+                    node_sec["PrivateInterface"] = node_conf.private_interface
+                if "public_interface" in node_conf.keys():
+                    node_sec["PublicInterface"] = node_conf.public_interface
+                # disks
+                # a.) delete disks that don't exist in the node_conf
+                if remove_disks is True:
+                    for sect in tuple(node_sec.sections):
+                        if self.is_disk(sect) and self.get_section_id(sect) not in node_conf.disks.keys():
+                            del node_sec[sect]
+                # b.) update / add disks
+                if "disks" in node_conf.keys():
+                    for name, disk in node_conf.disks.items():
+                        disk_sec = odict()
+                        if name in node_sec.sections:
+                            disk_sec = node_sec[name]
+                        if "devices" in disk.keys():
+                            disk_sec["Devices"] = ", ".join([ d[0][:-len(self.data_dev_suffix)] for d in disk.devices ])
+                        if "mapping" in disk.keys():
+                            disk_sec["Mapping"] = ", ".join([":".join([m[0], m[1]]) for m in disk.mapping ])
+                        if "direct_io" in disk.keys():
+                            disk_sec["DirectIO"] = str(disk.direct_io)                        
+                        node_sec["Disk : " + name] = disk_sec
 
         self.commit()
 #}}}
@@ -1100,6 +1106,35 @@ class EXAConf:
 
         self.commit()
 #}}}
+ 
+#{{{ Merge node UUIDs
+    def merge_node_uuids(self, exaconf_list):
+        """
+        Merges the node UUIDs of the EXAConf instances in the given list into this EXAConf instance. 
+        Done by replacing all UUIDs with value "IMPORT" in this instance with the UUID of the same
+        node in another instance (if that UUID is not "IMPORT"). 
+
+        Throws an exception if different UUIDs are found for the same node.
+        """
+
+        for section in self.config.sections:
+            if self.is_node(section):
+                node_sec = self.config[section]
+                nid = self.get_section_id(section)
+                for exaconf in exaconf_list:
+                    other_nodes = exaconf.get_nodes_conf()
+                    if nid in other_nodes.keys():
+                        other_node = other_nodes[nid]
+                        # a.) copy UUID from other node
+                        if node_sec["UUID"] == "IMPORT" and other_node.uuid != "IMPORT":
+                            node_sec["UUID"] = other_node.uuid
+                        # b.) compare UUIDs
+                        elif node_sec["UUID"] != "IMPORT" and other_node.uuid != "IMPORT":
+                            if node_sec["UUID"] != other_node.uuid:
+                                raise EXAConfError("Node %s has different UUIDs: '%s' (current) and '%s' (other)." % (nid, node_sec["UUID"], other_node.uuid))
+        self.commit()
+
+#}}}
           
 ############################## GETTER #################################
  
@@ -1111,10 +1146,10 @@ class EXAConf:
         return section.split(":")[1].strip()
 #}}}
  
-#{{{
+#{{{ Get revision
     def get_revision(self):
         """
-        Returns the revision number (or 0, if not found).
+        Returns the EXAConf revision number (or 0, if not found).
         """
         if "Revision" in self.config["Global"].scalars:
             return self.config["Global"]["Revision"]
@@ -1184,8 +1219,11 @@ class EXAConf:
     def get_cored_port(self):
         """
         Returns the port number used by the 'Cored' daemon.
-        """
-        return self.config["Global"]["CoredPort"]
+        """          
+        if "CoredPort" in self.config["Global"].scalars:
+            return self.config["Global"]["CoredPort"]
+        else:
+            return self.def_cored_port
 #}}}
  
 #{{{ Get ssh port
@@ -1197,6 +1235,17 @@ class EXAConf:
             return self.config["Global"]["SSHPort"]
         else:
             return self.def_ssh_port
+#}}}
+   
+#{{{ Get XMLRPC port
+    def get_xmlrpc_port(self):
+        """
+        Returns the port number used by the XMLRPC API.
+        """
+        if "XMLRPCPort" in self.config["Global"].scalars:
+            return self.config["Global"]["XMLRPCPort"]
+        else:
+            return self.def_xmlrpc_port
 #}}}
  
 #{{{ Get license file
@@ -1287,6 +1336,32 @@ class EXAConf:
         return self.get_network("PublicNet")
 #}}}
 
+# {{{ Node id exists
+    def node_id_exists(self, nid):
+        """
+        Returns True if a node with the given ID exists, False otherwise.
+        """
+        for section in self.config.sections:
+            if self.is_node(section):
+                if str(nid) == self.get_section_id(section):
+                    return True
+        return False                 
+# }}}
+ 
+# {{{ Get curr max nid
+    def get_curr_max_nid(self):
+        """
+        Returns the max ID of all existing nodes or 'max_reserved_node_id' if there are none.
+        """
+        max_nid = int(self.max_reserved_node_id)
+        for section in self.config.sections:
+            if self.is_node(section):
+                nid = int(self.get_section_id(section))
+                if nid > max_nid:
+                    max_nid = nid
+        return max_nid
+# }}}
+ 
 #{{{ Get nodes conf
     def get_nodes_conf(self):
         """ 
@@ -1301,10 +1376,12 @@ class EXAConf:
                 node_conf = config()
                 node_conf.id = nid
                 node_conf.name = node_sec["Name"]
-                node_conf.private_net = node_sec["PrivateNet"]
-                node_conf.private_ip = node_conf.private_net.split("/")[0]
-                node_conf.public_net = node_sec["PublicNet"]
-                node_conf.public_ip = node_conf.public_net.split("/")[0]
+                if node_sec["PrivateNet"].strip() != "":
+                    node_conf.private_net = node_sec["PrivateNet"]
+                    node_conf.private_ip = node_conf.private_net.split("/")[0]
+                if node_sec["PublicNet"].strip() != "":
+                    node_conf.public_net = node_sec["PublicNet"]
+                    node_conf.public_ip = node_conf.public_net.split("/")[0]
                 node_conf.uuid = node_sec["UUID"]
                 # storage disks
                 node_conf.disks = config()
@@ -1313,9 +1390,10 @@ class EXAConf:
                         disk_sec = node_sec[subsec]
                         disk_conf = config()
                         disk_conf.name = self.get_section_id(subsec)
-                        devices = [ dev.strip() for dev in disk_sec["Devices"].split(",") if dev.strip() != "" ]
-                        disk_conf.devices = [ (dev+self.data_dev_suffix, dev+self.meta_dev_suffix) for dev in devices ]
                         # optional disk values
+                        if "Devices" in disk_sec.scalars:
+                            devices = [ dev.strip() for dev in disk_sec["Devices"].split(",") if dev.strip() != "" ]
+                            disk_conf.devices = [ (dev+self.data_dev_suffix, dev+self.meta_dev_suffix) for dev in devices ]
                         if "Mapping" in disk_sec.scalars:
                             # the device-mapping entries, as they are found in the EXAConf file
                             disk_conf.mapping = [ (m.split(":")[0].strip(), m.split(":")[1].strip()) for m in disk_sec["Mapping"].split(",") if m.strip() != "" ]
@@ -1476,7 +1554,33 @@ class EXAConf:
                 db_configs[db_name] = conf
         return self.filter_configs(db_configs, filters)
 #}}}
-      
+          
+# {{{ Get node usage
+    def get_node_usage(self, nid):
+        """
+        Returns a dict containing all volumes and / or DBs that the given node is part of ('None' otherwise).
+        """
+        
+        result = config()
+        config.volumes = []
+        config.dbs = []
+        # check volumes
+        volumes = self.get_storage_volumes()
+        for v in volumes.values():
+            if nid in v.nodes:
+                result.volumes.append(v.name)
+        # check DBs
+        dbs = self.get_databases()
+        for db in dbs.values():
+            if nid in db.nodes:
+                result.dbs.append(db.name)
+
+        if len(result.volumes) == 0 and len(result.dbs) == 0:
+            return None
+        else:
+            return result
+# }}}
+ 
 #{{{ Get bucketfs conf
     def get_bucketfs_conf(self):
         """
@@ -1559,35 +1663,172 @@ class EXAConf:
         return configs
 #}}}
 
-#{{{ Merge node UUIDs
-    def merge_node_uuids(self, exaconf_list):
+################### SIMPLE API (dedicated functions for selected actions) ##############
+  
+#{{{ Add node disk
+    def add_node_disk(self, node_id, disk):
         """
-        Merges the node UUIDs of the EXAConf instances in the given list into this EXAConf instance. 
-        Done by replacing all UUIDs with value "IMPORT" in this instance with the UUID of the same
-        node in another instance (if that UUID is not "IMPORT"). 
-
-        Throws an exception if different UUIDs are found for the same node.
+        Adds an empty disk to the given node in the EXAConf. 
+        
+        Use 'add_node_device' to add a disk with devices.
         """
 
-        for section in self.config.sections:
-            if self.is_node(section):
-                node_sec = self.config[section]
-                nid = self.get_section_id(section)
-                for exaconf in exaconf_list:
-                    other_nodes = exaconf.get_nodes_conf()
-                    if nid in other_nodes.keys():
-                        other_node = other_nodes[nid]
-                        # a.) copy UUID from other node
-                        if node_sec["UUID"] == "IMPORT" and other_node.uuid != "IMPORT":
-                            node_sec["UUID"] = other_node.uuid
-                        # b.) compare UUIDs
-                        elif node_sec["UUID"] != "IMPORT" and other_node.uuid != "IMPORT":
-                            if node_sec["UUID"] != other_node.uuid:
-                                raise EXAConfError("Node %s has different UUIDs: '%s' (current) and '%s' (other)." % (nid, node_sec["UUID"], other_node.uuid))
-        self.commit()
-
+        nodes_conf = self.get_nodes_conf()
+        if str(node_id) not in nodes_conf.keys():
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_conf = nodes_conf[str(node_id)]
+        if "disks" in node_conf.keys():
+            if disk in node_conf.disks.keys():
+                raise EXAConfError("Node %s alrady contains disk '%s'." % (str(node_id), disk))
+            else:
+                node_conf.disks[disk] = config()
+        else:
+            node_conf["disks"] = {disk: None}
+        
+        self.set_node_conf(node_conf, node_conf.id)
 #}}}
 
+#{{{ Remove node disk
+    def remove_node_disk(self, node_id, disk):
+        """ 
+        Removes the given storage disk (or all disks) from the given node.
+        """
+
+        nodes_conf = self.get_nodes_conf()
+        if str(node_id) not in nodes_conf.keys():
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_conf = nodes_conf[str(node_id)]
+        if "disks" in node_conf.keys():
+            if disk == "all":
+                node_conf.disks.clear()
+            else:
+                for d in tuple(node_conf.disks.values()):
+                    if d.name == disk:
+                        del node_conf.disks[d.name]
+
+        self.set_node_conf(node_conf, node_conf.id, remove_disks=True)
+#}}}
+   
+#{{{ Add node device
+    def add_node_device(self, node_id, disk, device, path = None):
+        """ 
+        Adds the given device as a storage device to the given node.
+        If 'disk' does not exist on the given node, it will be created.
+        If 'path' is specified, a mapping is also added. 
+        """
+
+        nodes_conf = self.get_nodes_conf()
+        if str(node_id) not in nodes_conf.keys():
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_conf = nodes_conf[str(node_id)]
+        # get / create disk(s) entry
+        node_disks = config()
+        if "disks" in node_conf.keys():
+            node_disks = node_conf.disks
+        if disk not in node_disks.keys():
+            node_disks[disk] = config()
+            node_disks[disk].devices = []
+        # add devices
+        node_disks[disk].devices.append((device+self.data_dev_suffix, device+self.meta_dev_suffix))
+        if path and path != "":
+            if "mapping" not in node_disks[disk].keys():
+                node_disks[disk].mapping = []
+            node_disks[disk].mapping.append((device,path))
+        
+        self.set_node_conf(node_conf, node_conf.id)
+#}}}
+
+#{{{ Remove node device
+    def remove_node_device(self, node_id, disk, device, remove_empty_disk=True):
+        """
+        Removes the given device from the node and disk. Also deletes the disk
+        if it does not contain other devices and 'remove_empty_disk' is True.
+        """
+      
+        nodes_conf = self.get_nodes_conf()
+        if str(node_id) not in nodes_conf.keys():
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_conf = nodes_conf[str(node_id)]
+        if "disks" not in node_conf.keys():
+            raise EXAConfError("Node %s does not have any disks." % node_id)
+        node_disks = node_conf.disks
+        if disk not in node_disks.keys():
+            raise EXAConfError("Node %s does not have a disk named '%s'." % (node_id, disk))
+        if "devices" not in node_disks[disk].keys():
+            raise EXAConfError("Disk '%s' of node %s does not have any devices." % (disk, node_id))
+        # delete device
+        node_disks[disk].devices = [ d for d in node_disks[disk].devices if d[0] != str(device + self.data_dev_suffix) ]
+        if len(node_disks[disk].devices) == 0:
+            del node_disks[disk]["devices"]
+        # delete mapping
+        if "mapping" in node_disks[disk].keys():
+            node_disks[disk].mapping = [ m for m in node_disks[disk].mapping if m[0] != device ]
+            if len(node_disks[disk].mapping) == 0:
+                del node_disks[disk]["mapping"]
+        # delete disk if empty (and requested)
+        if remove_empty_disk and "devices" not in node_disks[disk]:
+            del node_disks[disk]
+        
+        self.set_node_conf(node_conf, node_conf.id, remove_disks = remove_empty_disk)
+#}}}
+ 
+#{{{ Use disk for volumes
+    def use_disk_for_volumes(self, disk, bytes_per_node, vol_type=None, min_vol_size = None, vol_resize_step=None):
+        """
+        Adds the given disk to all volumes of the given type that don't have a disk assigned yet.         
+        The given 'bytes_per_node' space is distributed equally across all suitable volumes.
+        """
+
+        # we only consider volumes without disks
+        filters = {"disk": None}
+        if vol_type and vol_type != "":
+            filters["type"] = vol_type
+        volumes = self.get_storage_volumes(filters=filters)
+        bytes_per_volume_node = bytes_per_node / len(volumes)
+
+        for volume in volumes.iteritems():
+            vol_sec = self.config["EXAVolume : " + volume[0]]
+            vol_sec["Disk"] = disk
+            # decrease volume size to the next multiple of the vol_resize_step (if given)
+            if vol_resize_step and vol_resize_step > 0:
+                vol_size = bytes2units((vol_resize_step * (bytes_per_volume_node // vol_resize_step)) / volume[1].redundancy)
+                if units2bytes(vol_size) < vol_resize_step:
+                    vol_size = bytes2units(vol_resize_step)
+            else:
+                vol_size = bytes2units(bytes_per_volume_node / volume[1].redundancy)
+            # check size if given
+            if min_vol_size and units2bytes(vol_size) < min_vol_size:
+                raise EXAConfError("Can't assign disk to volume because resulting size '%s' is below min. size %s!" % (vol_size, bytes2units(min_vol_size)))
+            vol_sec["Size"] = vol_size
+
+        self.commit()
+#}}}
+
+#{{{ Set node network
+    def set_node_network(self, node_id, private=None, public=None):
+        """
+        Sets the private and / or public network of the given node. 
+        """
+
+        # TODO : use 'set_node_conf()'
+
+        node_section = "Node : " + str(node_id)
+        if node_section not in self.config.sections:
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_sec = self.config[node_section]
+
+        if private and private != "":
+            if not self.net_is_valid(private):
+                raise EXAConfError("Private network '%s' is invalid!" % private)
+            node_sec["PrivateNet"] = private
+        if public and public != "":
+            if not self.net_is_valid(public):
+                raise EXAConfError("Public network '%s' is invalid!" % public)
+            node_sec["PublicNet"] = public
+
+        self.commit()
+#}}}
+ 
 ##############################  DOCKER EXCLUSIVE STUFF ##################################
 
 #{{{ Get docker image

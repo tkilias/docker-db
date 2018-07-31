@@ -34,7 +34,7 @@ Currently supported features:
  
 ## Docker
 
-`exadt` and the EXASOL Docker image have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 2.6.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
+`exadt` and the EXASOL Docker image have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 3.2.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
  
 **NOTE: docker-py version 2.3.0 contains a known bug that prevents exadt from starting containers.**
 
@@ -530,7 +530,7 @@ We strongly recommend to use only Linux for the EXASOL Docker image. If you are 
 
 > Could not start database: system does not have enough active nodes or DWAd was not able to create startup parameters for system
 
-If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB RAM per node (that's also the default value in EXAConf).
+If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB per node (that's also the default value in EXAConf).
 
 
 # Reporting bugs

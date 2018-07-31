@@ -1,7 +1,8 @@
-import os,docker,EXAConf,pprint,shutil,device_handler
+import os,docker,pprint,shutil,device_handler
 from docker.utils import kwargs_from_env
-from libexadt.EXAConf import config
-from libexadt.utils import rotate_file
+import EXAConf
+from utils import rotate_file
+from EXAConf import config
 
 ip_types = { 4: 'ipv4_address', 6: 'ipv6_address' }
  

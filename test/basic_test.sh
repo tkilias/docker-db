@@ -2,14 +2,19 @@
 
 source "$(dirname $0)/functions.sh"
 
-BINARY="$(readlink -f "$(dirname "$0")/../exadt")"
+EXADT_DIR="$(readlink -f "$(dirname "$0")/../")"
 LICENSE="$(readlink -f "$(dirname "$0")/../license/license.xml")"
 ROOT="$HOME"
 IMAGE="exasol/docker-db-dev:latest"
 DOCKER="$(which docker)"
+PIPENV="$(which pipenv)"
 TMP_DIR=$(mktemp -d)
 INFO_FILE="$TMP_DIR/exasol_info.tgz"
 NUM_NODES=1
+
+if [[ -z $PIPENV ]]; then
+    die "'pipenv' is not installed or not in \$PATH!"
+fi
 
 cleanup() {
     rm -rf "$TMP_DIR"
@@ -26,13 +31,13 @@ die() {
 }
  
 usage() {
-    echo "Usage: $0 [-i IMAGE] [-r ROOT] [-b EXADT_BINARY] [-D DOCKER CMD]"
+    echo "Usage: $0 [-i IMAGE] [-r ROOT] [-b EXADT_BINARY_DIR] [-D DOCKER CMD]"
     echo "Parameters:"
     echo "-i    : Docker image to use for the test (default: '$IMAGE')."
     echo "-n    : Number of nodes  / containers for the test-cluster (default: '$NUM_NODES')."
     echo "-D    : Docker command (default: '$DOCKER')."
     echo "-r    : Root directory for cluster creation (default: '$ROOT')."
-    echo "-b    : The exadt binary (default: '$BINARY')."
+    echo "-b    : The folder that contains the exadt binary (default: '$EXADT_DIR')."
     echo "-l    : The license (default: '$LICENSE')."
 }
 
@@ -56,8 +61,8 @@ while getopts "i:n:D:r:b:l:h" opt; do
             log "INFO:: Using root directory '$ROOT'."
             ;;
         b)
-            BINARY="$(readlink -f $(which "$OPTARG"))"
-            log "INFO:: Using binary '$BINARY'."
+            EXADT_DIR="$(readlink -f $(which "$OPTARG"))"
+            log "INFO:: Using exadt binary from '$EXADT_DIR'."
             ;;
         l)
             LICENSE="$(readlink -f "$OPTARG")"
@@ -78,31 +83,32 @@ done
 log "=== Starting exadt basic test ==="
 $DOCKER pull "$IMAGE" #does not work with locally built dev-images
 set -e
-"$BINARY" list-clusters
-"$BINARY" create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster
-"$BINARY" list-clusters
-"$BINARY" collect-info --outfile "$INFO_FILE" MyCluster
-"$BINARY" init-cluster --image "$IMAGE" --num-nodes "$NUM_NODES" --license "$LICENSE" --device-type file --auto-storage --force MyCluster
-"$BINARY" list-clusters
-"$BINARY" collect-info --outfile "$INFO_FILE" MyCluster
-"$BINARY" start-cluster MyCluster
-"$BINARY" ps MyCluster
-"$BINARY" exec -c "/bin/date" -a MyCluster
-wait_db "$BINARY" "DB1" MyCluster
-"$BINARY" list-dbs MyCluster
-"$BINARY" collect-info --outfile "$INFO_FILE" MyCluster
-"$BINARY" exec -c "/bin/bash -c 'X=\$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo \"SELECT 123*42345;\" | \$X -c n11:8888 -u sys -P exasol'" MyCluster 2>&1 | tee /dev/stderr | grep -q 5208435
-"$BINARY" list-dbs MyCluster
-"$BINARY" stop-db MyCluster
-"$BINARY" start-db MyCluster
-"$BINARY" stop-cluster MyCluster
-"$BINARY" create-file-devices --size 10GiB MyCluster
-yes | "$BINARY" create-file-devices --size 10GiB MyCluster --replace --path $HOME
-"$BINARY" update-cluster --image "$IMAGE" MyCluster
-"$BINARY" start-cluster MyCluster
-"$BINARY" stop-cluster MyCluster
-"$BINARY" start-cluster MyCluster --command "/bin/sleep 30"
-"$BINARY" stop-cluster MyCluster --timeout 2
-yes | "$BINARY" delete-cluster MyCluster
+cd "$EXADT_DIR" # necessary for pipenv
+"$PIPENV" run ./exadt list-clusters
+"$PIPENV" run ./exadt create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster
+"$PIPENV" run ./exadt list-clusters
+"$PIPENV" run ./exadt collect-info --outfile "$INFO_FILE" MyCluster
+"$PIPENV" run ./exadt init-cluster --image "$IMAGE" --num-nodes "$NUM_NODES" --license "$LICENSE" --device-type file --auto-storage --force MyCluster
+"$PIPENV" run ./exadt list-clusters
+"$PIPENV" run ./exadt collect-info --outfile "$INFO_FILE" MyCluster
+"$PIPENV" run ./exadt start-cluster MyCluster
+"$PIPENV" run ./exadt ps MyCluster
+"$PIPENV" run ./exadt exec -c "/bin/date" -a MyCluster
+wait_db "$EXADT_DIR" "DB1" MyCluster
+"$PIPENV" run ./exadt list-dbs MyCluster
+"$PIPENV" run ./exadt collect-info --outfile "$INFO_FILE" MyCluster
+"$PIPENV" run ./exadt exec -c "/bin/bash -c 'X=\$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo \"SELECT 123*42345;\" | \$X -c n11:8888 -u sys -P exasol'" MyCluster 2>&1 | tee /dev/stderr | grep -q 5208435
+"$PIPENV" run ./exadt list-dbs MyCluster
+"$PIPENV" run ./exadt stop-db MyCluster
+"$PIPENV" run ./exadt start-db MyCluster
+"$PIPENV" run ./exadt stop-cluster MyCluster
+"$PIPENV" run ./exadt create-file-devices --size 10GiB MyCluster
+yes | "$PIPENV" run ./exadt create-file-devices --size 10GiB MyCluster --replace --path $HOME
+"$PIPENV" run ./exadt update-cluster --image "$IMAGE" MyCluster
+"$PIPENV" run ./exadt start-cluster MyCluster
+"$PIPENV" run ./exadt stop-cluster MyCluster
+"$PIPENV" run ./exadt start-cluster MyCluster --command "/bin/sleep 30"
+"$PIPENV" run ./exadt stop-cluster MyCluster --timeout 2
+yes | "$PIPENV" run ./exadt delete-cluster MyCluster
 set +x
 log "=== Successful! ==="

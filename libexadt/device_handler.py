@@ -1,8 +1,8 @@
 #! /usr/bin/env python2.7
 
 import os, glob
-from libexadt import EXAConf
-from libexadt.utils import bytes2units
+import EXAConf
+from utils import bytes2units
 from collections import OrderedDict as odict
 
 #{{{ Class DeviceError
@@ -227,7 +227,7 @@ class device_handler:
                 os.unlink(df)
                 os.unlink(mf)
 
-        self.exaconf.remove_node_devices(node_conf.id)
+        self.exaconf.remove_node_disk(node_conf.id, disk="all")
         return deleted_devices
 #}}}
 
