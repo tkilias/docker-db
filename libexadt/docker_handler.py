@@ -259,7 +259,7 @@ class docker_handler:
 
         created_containers = []
         try:
-            nodes_conf = self.exaconf.get_nodes_conf()
+            nodes_conf = self.exaconf.get_nodes()
             if self.verbose:
                 print "Found the following node configurations:"
                 pprint.pprint(nodes_conf)
@@ -303,7 +303,7 @@ class docker_handler:
             # --> each file-device needs to be mounted into the storage-directory within the container
             if docker_conf.device_type == 'file':
                 for disk in my_conf.disks.itervalues():
-                    if disk.has_key("mapped_devices"):
+                    if "mapped_devices" in disk:
                         for dev_host, dev_container in disk.mapped_devices:
                             binds.append(dev_host + ":" + dev_container + ":rw")
                             volumes.append(dev_container)
@@ -322,7 +322,7 @@ class docker_handler:
             # d. BucketFS volumes
             for bfs_name in bucketfs_conf.fs.keys():
                 bfs_conf = bucketfs_conf.fs[bfs_name]
-                if bfs_conf.has_key("path") and bfs_conf.path != "":
+                if "path" in bfs_conf and bfs_conf.path != "":
                     bfs_host = os.path.join(bfs_conf.path, my_conf.name, bfs_name)
                     bfs_container = os.path.join(self.exaconf.container_root, self.exaconf.bucketfs_dir, bfs_name)
                     binds.append(bfs_host + ":" + bfs_container + ":rw")
@@ -334,7 +334,7 @@ class docker_handler:
 
             # port bindings
             port_binds = {}
-            if my_conf.has_key("exposed_ports"):
+            if "exposed_ports" in my_conf:
                 port_binds = dict(my_conf.exposed_ports)
             # create host config
             hc = self.client.create_host_config(privileged = docker_conf.privileged,
@@ -529,7 +529,7 @@ class docker_handler:
 #}}}
  
 #{{{ Merge exaconf
-    def merge_exaconf(self):
+    def merge_exaconf(self, allow_self, force):
         """
         Merges the EXAConf copies within the containers into the 'external' EXAConf in the cluster root directory.
         """
@@ -542,10 +542,12 @@ class docker_handler:
                 if os.path.exists(os.path.join(node_etc_dir, "EXAConf")):
                     exaconf_list.append(EXAConf.EXAConf(node_etc_dir, True))
             if len(exaconf_list) > 0:
-                self.exaconf.merge_node_uuids(exaconf_list)     
+                self.exaconf.merge_exaconfs(exaconf_list, allow_self = allow_self, force = force)     
                 self.log("Merged EXAConf from %i node(s)." % len(exaconf_list))
         except EXAConf.EXAConfError as e:
             self.log("Error while merging EXAConf: '%s'! Skipping merge." % e)
+            return False
+        return True
 #}}}
 
 #{{{ Start cluster
@@ -579,30 +581,32 @@ class docker_handler:
                 if dh.check_free_space() == False:
                     raise DockerError("Check for space usage failed! Aborting startup.")
       
-            # 2. merge EXAConf copies
-            self.merge_exaconf()
+            # 2. merge EXAConf copies and copy necessary files
+            # --> changes to the external EXAConf (that have been done AFTER THE SHUTDOWN) are merged into the internal EXAConfs
+            if self.merge_exaconf(allow_self = True, force = False) is True:
+                # copy EXAConf and license to all node volumes
+                conf_path = self.exaconf.get_conf_path()
+                license = self.exaconf.get_license_file()
+                node_volumes = self.exaconf.get_docker_node_volumes()
+                self.log("Copying EXAConf and license to all node volumes.")
+                for n,volume in node_volumes.iteritems():
+                    shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
+                    shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
+                # copy SSL files (if they exist)
+                try:
+                    ssl_conf = self.exaconf.get_ssl_conf()
+                    if "cert" in ssl_conf and os.path.isfile(ssl_conf.cert):
+                        shutil.copy(ssl_conf.cert, os.path.join(volume, self.exaconf.ssl_dir))
+                    if "cert_key" in ssl_conf and os.path.isfile(ssl_conf.cert_key):
+                        shutil.copy(ssl_conf.cert_key, os.path.join(volume, self.exaconf.ssl_dir))
+                    if "cert_auth" in ssl_conf and os.path.isfile(ssl_conf.cert_auth):
+                        shutil.copy(ssl_conf.cert_auth, os.path.join(volume, self.exaconf.ssl_dir))
+                except EXAConf.EXAConfError as e:
+                    print "Skipping SSL configuration (not present in EXAConf)."
+            else:
+                self.log("Not copying EXAConf (and referenced files) because EXAConf merge failed!")
 
-            # 3. copy EXAConf and license to all node volumes
-            conf_path = self.exaconf.get_conf_path()
-            license = self.exaconf.get_license_file()
-            node_volumes = self.exaconf.get_docker_node_volumes()
-            self.log("Copying EXAConf and license to all node volumes.")
-            for n,volume in node_volumes.iteritems():
-                shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
-                shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
-            # 3.1 Copy SSL files (if they exist)
-            try:
-                ssl_conf = self.exaconf.get_ssl_conf()
-                if ssl_conf.has_key("cert") and os.path.isfile(ssl_conf.cert):
-                    shutil.copy(ssl_conf.cert, os.path.join(volume, self.exaconf.ssl_dir))
-                if ssl_conf.has_key("cert_key") and os.path.isfile(ssl_conf.cert_key):
-                    shutil.copy(ssl_conf.cert_key, os.path.join(volume, self.exaconf.ssl_dir))
-                if ssl_conf.has_key("cert_auth") and os.path.isfile(ssl_conf.cert_auth):
-                    shutil.copy(ssl_conf.cert_auth, os.path.join(volume, self.exaconf.ssl_dir))
-            except EXAConf.EXAConfError as e:
-                print "Skipping SSL configuration (not present in EXAConf)."
-
-            # 4. create networks (if network mode is not "host")
+            # 3. create networks (if network mode is not "host")
             if docker_conf.network_mode != "host":
                 try:
                     networks = self.create_networks()
@@ -643,8 +647,9 @@ class docker_handler:
             print "Error during shutdown: %s! Continueing anyway..." % e
             ex = e
         # save logs and merge EXAConf before removing containers
+        # NOTE : merging is also done within exadt
         self.save_logs()
-        self.merge_exaconf()
+        self.merge_exaconf(allow_self = False, force = True)
         try:
             if stopped:
                 self.remove_containers()

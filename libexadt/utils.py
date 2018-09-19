@@ -30,10 +30,12 @@ units2bytes.convb = units2bytes.convf(1024)
 
 #{{{ Bytes to units
 def bytes2units(num):
-    for x in ['B', 'KiB', 'MiB', 'GiB', 'TiB']:
+    num = float(num)
+    for x in ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'):
         if num < 1024.0:
-            return "%3.1f %s" % (num, x)
+            return "%s %s" % (("%3.4f" % num).rstrip('0').rstrip('.'), x)
         num /= 1024.0
+    return "%s YiB" % ("%-3.8f" % num).rstrip('0').rstrip('.')
 #}}}
  
 #{{{ Gen passwd

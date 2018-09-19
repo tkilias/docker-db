@@ -9,8 +9,8 @@ wait_db() {
     cd "$1"
     # 'exec' command has been introduced with 6.0.1, so we have to check for support first!
     if [[ -z $("$PIPENV" run ./exadt --help | grep exec) ]]; then
-        echo "'exec' is not supported! Sleeping for 30 seconds instead"
-        sleep 30
+        echo "'exec' is not supported! Sleeping for 60 seconds instead"
+        sleep 60
     else
         echo "waiting for $2 to start"
         while [[ -z $("$PIPENV" run ./exadt exec -c "dwad_client shortlist" "$3" | grep "$2") ]]

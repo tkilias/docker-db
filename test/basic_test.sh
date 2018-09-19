@@ -61,7 +61,7 @@ while getopts "i:n:D:r:b:l:h" opt; do
             log "INFO:: Using root directory '$ROOT'."
             ;;
         b)
-            EXADT_DIR="$(readlink -f $(which "$OPTARG"))"
+            EXADT_DIR="$(readlink -f "$OPTARG")"
             log "INFO:: Using exadt binary from '$EXADT_DIR'."
             ;;
         l)
@@ -84,6 +84,7 @@ log "=== Starting exadt basic test ==="
 $DOCKER pull "$IMAGE" #does not work with locally built dev-images
 set -e
 cd "$EXADT_DIR" # necessary for pipenv
+"$PIPENV" install -r ./exadt_requirements.txt
 "$PIPENV" run ./exadt list-clusters
 "$PIPENV" run ./exadt create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster
 "$PIPENV" run ./exadt list-clusters

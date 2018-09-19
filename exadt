@@ -8,7 +8,7 @@ from libexadt.EXAConf import config
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.0.11"
+my_version = "6.0.12"
 info_arc_prefix = "exasol_docker_info"
 confirm_yes = False
 
@@ -167,12 +167,12 @@ def delete_cluster(cmd):
         try:
             # validate manually if initalized
             exaconf.validate()
-            nodes_conf = exaconf.get_nodes_conf()
+            nodes_conf = exaconf.get_nodes()
         except EXAConf.EXAConfError as e:
             print e
         for node in nodes_conf.itervalues():
             for disk in node.disks.itervalues():
-                if disk.has_key("mapping"):
+                if "mapping" in disk:
                     for dev,path in disk.mapping:
                         try:
                             # follow symlink
@@ -401,7 +401,7 @@ def init_sc(cmd):
     # if EXAConf is already initialized, we compare the current local IP
     # with the one in the EXAConf, instead of setting it
     elif not cmd.template:
-        nodes_conf = exaconf.get_nodes_conf()
+        nodes_conf = exaconf.get_nodes()
         if cmd.node_id in nodes_conf.iterkeys():
             priv_net = nodes_conf[cmd.node_id].private_net
             priv_net_up = False
@@ -434,7 +434,7 @@ def init_sc(cmd):
     try:
         conf = config()
         conf.owner = (sc_owner, sc_group)
-        exaconf.set_storage_volume_conf(conf, "all")
+        exaconf.set_volume_conf(conf, "all")
         exaconf.set_database_conf(conf, "all")
         bfs_conf = config()
         bfs_conf.service_owner = (sc_owner, sc_group)
@@ -470,7 +470,7 @@ def init_sc(cmd):
         exaconf.config.write(outfile=sys.stdout)
         sys.exit(0)
     else:
-        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.11/libexec/exainit.py'
+        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.12/libexec/exainit.py'
         log_err("exadt:: calling '%s'" % exainit_cmd)
         os.execl(exainit_cmd, exainit_cmd)
 #}}}
@@ -500,8 +500,10 @@ def create_node_dirs(node_root, exaconf):
         os.makedirs(os.path.join(node_root, exaconf.job_finish_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.job_archive_dir)):
         os.makedirs(os.path.join(node_root, exaconf.job_archive_dir))
-    if not os.path.exists(os.path.join(node_root, exaconf.ssl_dir)):
-        os.makedirs(os.path.join(node_root, exaconf.ssl_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.conf_ssl_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.conf_ssl_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.conf_dwad_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.conf_dwad_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):
         os.makedirs(os.path.join(node_root, exaconf.md_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.md_storage_dir)):
@@ -526,6 +528,10 @@ def create_node_dirs(node_root, exaconf):
         os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))   
     if not os.path.exists(os.path.join(node_root, exaconf.docker_log_dir)):
         os.makedirs(os.path.join(node_root, exaconf.docker_log_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.drive_pool_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.drive_pool_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.device_pool_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.device_pool_dir))
 #}}}
 
 #{{{ List clusters
@@ -617,7 +623,7 @@ def start_cluster(cmd):
             print "EXAConf version (%s) is not compatible with image version (%s). Please update your installation!" % (ev, iv)
             sys.exit(1)
         # check if the volumes all have disks assigned
-        for name,vol in exaconf.get_storage_volumes().iteritems():
+        for name,vol in exaconf.get_volumes().iteritems():
             if vol.disk is None:
                 print "Volume '%s' has no disk! Aborting cluster startup." % name
                 sys.exit(1)
@@ -650,6 +656,10 @@ def stop_cluster(cmd):
     try:
         dh = docker_handler.docker_handler(verbose=cmd.verbose)
         dh.set_exaconf(exaconf)
+        # merge EXAConf right before stopping the system,
+        # just to make sure that we get the internal changes,
+        # even if the shutdown fails
+        dh.merge_exaconf(allow_self = False, force = True)
         if dh.cluster_online():
             drh = docker_rpc_handler.docker_rpc_handler(exaconf, quiet=True)
             print "Stopping database(s)...",
@@ -687,7 +697,7 @@ def update_cluster(cmd):
         exaconf.update_db_version(new_db_version)
         exaconf.update_os_version(new_os_version)
         exaconf.update_img_version(new_img_version)
-        nodes_conf = exaconf.get_nodes_conf()
+        nodes_conf = exaconf.get_nodes()
     except EXAConf.EXAConfError as e:
         print e
         sys.exit(1)
@@ -768,7 +778,7 @@ def ps(cmd):
     width[5] = max(max(len(c['Names'][0].lstrip("/")) for c in containers), len("CONTAINER NAME"))
     width[6] = 0
     for c in containers:
-        ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if d.has_key('PublicPort') ]
+        ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if 'PublicPort' in d]
         ports_str = ",".join([str(p[0]) + "->" + str(p[1]) for p in ports])
         if len(ports_str) > width[6]:
             width[6] = len(ports_str)
@@ -782,7 +792,7 @@ def ps(cmd):
                                                                       width[5], "CONTAINER NAME", 
                                                                       width[6], "EXPOSED PORTS")
     for c in containers:
-        ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if d.has_key('PublicPort') ]
+        ports = [ (d["PublicPort"], d["PrivatePort"]) for d in c['Ports'] if 'PublicPort' in d]
         ports_str = ",".join([str(p[0]) + "->" + str(p[1]) for p in ports])
         print " %- *s   %- *s   %- *s   %- *s   %- .*s   %- *s   %- *s" % (width[0], c['Labels']['NodeID'], 
                                                                            width[1], c['Status'], 
@@ -1022,7 +1032,7 @@ def collect_info(cmd):
             tar.addfile(tc, io.BytesIO(container_info))
         # add "/logs" and "/etc" directories
         if initialized:
-            nodes_conf = exaconf.get_nodes_conf()
+            nodes_conf = exaconf.get_nodes()
             for nid, conf in nodes_conf.iteritems():
                 # logs
                 try:

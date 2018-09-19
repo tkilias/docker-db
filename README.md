@@ -25,6 +25,8 @@ Currently supported features:
 
 [Installing Oracle drivers](#installing-oracle-drivers)
 
+[Connecting to the database](#connecting-to-the-database)
+
 [Troubleshooting](#troubleshooting)
 
 [Reporting bugs](#reporting-bugs)
@@ -36,8 +38,6 @@ Currently supported features:
 
 `exadt` and the EXASOL Docker image have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 3.2.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
  
-**NOTE: docker-py version 2.3.0 contains a known bug that prevents exadt from starting containers.**
-
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
  
 ## Host OS
@@ -410,7 +410,7 @@ $ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1.data bs=1M count=1 se
 $ touch $HOME/exa_template/data/storage/dev.1.meta
 ```
 
-This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data and also a file that holds the metadata for that device. Adjust the size to your needs. 
+This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data and also a file that holds the metadata for that device. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.
 
 **NOTE: Alternatively you can partition a block-device (the meta partition needs only 2 MB) and create device files (using `mknod`) named `dev.1.data` and `dev.1.meta` in the same directory.**
  
@@ -491,6 +491,11 @@ $ awk '/WritePasswd/{ print $3; }' EXAConf | base64 -d
 
 **NOTE: The only currently supported driver version is 12.1.0.20. Please download the package `instantclient-basic-linux.x64-12.1.0.2.0.zip` from oracle.com and upload it as described above.**
  
+# Connecting to the database
+
+Connecting to the default Exasol DB inside a Docker container is not different from the "normal" version. You can use any supported client and authenticate with username `sys` and password `exasol`. 
+
+Please refer to the [offical manual](https://www.exasol.com/portal/display/DOC/Database+User+Manual) for further information.
 
 # Troubleshooting
 
@@ -530,23 +535,9 @@ We strongly recommend to use only Linux for the EXASOL Docker image. If you are 
 
 > Could not start database: system does not have enough active nodes or DWAd was not able to create startup parameters for system
 
-If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB per node (that's also the default value in EXAConf).
+If all containers started successfully but the database did not and you see a message similar to this in the output of `docker logs`, you may not have enough memory in your host(s). The DB needs at least 2 GiB RAM per node (that's also the default value in EXAConf).
 
 
 # Reporting bugs
 
-Please report bugs that are specifically related to the **dockerized** EXASOL DB at [Github](https://github.com/EXASOL/docker-db/issues).
-
-If you are using `exadt`, then simply add the archive created by `exadt collect-info <ClusterName>` to your bug report. If you created a container with `docker run`,
-then the following information could be helpful:
-
-* your Docker version (the output of `docker version`)
-* the output of `docker logs` and `docker inspect` (of container and image)
-* the content of `/exa/logs` and `/exa/etc` from within the container
-
-Also try to answer the following questions in your bug report:
-
-* What were you doing before the error occured?
-* What did you expect to happen?
-* What actually happened?
-
+Please read the [Contribution guidelines for this project](CONTRIBUTING.md) before submitting a bug report or pull request!

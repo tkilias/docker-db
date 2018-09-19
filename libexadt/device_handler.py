@@ -72,7 +72,7 @@ class device_handler:
             dev = dev[:-len(self.exaconf.meta_dev_suffix)]
         # search the device_mapping for the given device
         # --> device-name in mapping may also have suffix!
-        if disk_conf.has_key("mapping"):
+        if "mapping" in disk_conf:
             for mdev,path in disk_conf.mapping:
                 if mdev.endswith(self.exaconf.data_dev_suffix):
                     mdev = mdev[:-len(self.exaconf.data_dev_suffix)]
@@ -93,7 +93,7 @@ class device_handler:
         devices = set()
         mount_devices = odict()
         try:
-            nodes_conf = self.exaconf.get_nodes_conf()
+            nodes_conf = self.exaconf.get_nodes()
             docker_conf = self.exaconf.get_docker_conf()
         except EXAConf.EXAConfError as e:
             raise DeviceError("Unable to read EXAConf: %s" % e)
@@ -106,7 +106,7 @@ class device_handler:
             my_conf = nodes_conf[node_id]
             # add mapped devices (they have absolute paths)
             for disk in my_conf.disks.itervalues():
-                if disk.has_key("mapped_devices"):
+                if "mapped_devices" in disk:
                     for host_path, c in disk.mapped_devices:
                         devices.add(host_path)
             # add "normal" file-devices
@@ -208,7 +208,7 @@ class device_handler:
         # make list of all directories (default storage_dir + mapped directories)
         directories = []
         for disk in node_conf.disks.itervalues():
-            if disk.has_key("mapping"):
+            if "mapping" in disk:
                 for dev,path in disk.mapping:
                     # use parent directory in case of mapped files!
                     path = os.path.realpath(path)
@@ -243,7 +243,7 @@ class device_handler:
  
         try:
             docker_conf = self.exaconf.get_docker_conf()
-            nodes_conf = self.exaconf.get_nodes_conf()
+            nodes_conf = self.exaconf.get_nodes()
         except EXAConf.EXAConfError as e:
             raise DeviceError("Failed to read EXAConf: %s" % e)
  
@@ -265,7 +265,7 @@ class device_handler:
         if replace:
             deleted_node_devices = self.remove_file_devices(docker_root, my_conf)
             # refresh config after deletion
-            nodes_conf = self.exaconf.get_nodes_conf()
+            nodes_conf = self.exaconf.get_nodes()
             my_conf = nodes_conf[node_id]
         for i in range(num):
             data_file, meta_file = self.get_file_names(dest_dir, my_conf, False)
@@ -288,7 +288,7 @@ class device_handler:
                                              path if path and path != "" else None)
                 # we need to refresh the node configuration for each device, 
                 # otherwise the names would be wrong when adding multiple devices at once!
-                nodes_conf = self.exaconf.get_nodes_conf()
+                nodes_conf = self.exaconf.get_nodes()
                 my_conf = nodes_conf[node_id]
             except EXAConf.EXAConfError as e:
                 raise DeviceError("Failed to read EXAConf: %s" % e)
@@ -309,7 +309,7 @@ class device_handler:
         """
         
         try:
-            nodes_conf = self.exaconf.get_nodes_conf()
+            nodes_conf = self.exaconf.get_nodes()
         except EXAConf.EXAConfError as e:
             raise DeviceError("Failed to read EXAConf: %s" % e)
 
@@ -361,7 +361,7 @@ class device_handler:
             root_usable = min(root_free - self.auto_reserved_size, self.max_auto_used_space)
 
         try:
-            nodes_conf = self.exaconf.get_nodes_conf()
+            nodes_conf = self.exaconf.get_nodes()
         except EXAConf.EXAConfError as e:
             raise DeviceError("Failed to read EXAConf: %s" % e)
 
