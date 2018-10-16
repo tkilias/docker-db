@@ -480,7 +480,7 @@ In order for the database to find the driver, you have to upload it to `drivers/
 You can use `curl` for uploading, e. g.:
 
 ```
-$ curl -v -X PUT -T instantclient-basic-linux.x64-12.1.0.2.0.zip http://w:PASSWORD@10.10.10.11:6583/default/drivers/oracle/instantclient-basic-linux.x64-12.2.0.1.0.zip
+$ curl -v -X PUT -T instantclient-basic-linux.x64-12.1.0.2.0.zip http://w:PASSWORD@10.10.10.11:6583/default/drivers/oracle/instantclient-basic-linux.x64-12.1.0.2.0.zip
 ```
 
 Replace `PASSWORD` with the `WritePasswd` for the bucket. You can find it in the EXAConf. It's base64 encoded and can be decoded like this:
@@ -489,7 +489,7 @@ Replace `PASSWORD` with the `WritePasswd` for the bucket. You can find it in the
 $ awk '/WritePasswd/{ print $3; }' EXAConf | base64 -d
 ```
 
-**NOTE: The only currently supported driver version is 12.1.0.20. Please download the package `instantclient-basic-linux.x64-12.1.0.2.0.zip` from oracle.com and upload it as described above.**
+**NOTE: The only currently supported driver version is 12.1.0.2.0. Please download the package `instantclient-basic-linux.x64-12.1.0.2.0.zip` from oracle.com and upload it as described above.**
  
 # Connecting to the database
 
