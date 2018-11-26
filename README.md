@@ -73,7 +73,7 @@ The installation steps below assume that you have `pipenv` installed on your Doc
   ```
 - Install `exadt`:
   ```console
-  $ git clone https://github.com/EXASOL/docker-db.git
+  $ git clone https://github.com/EXASOL/docker-db.git <version>
   $ cd docker-db
   ```
 - Install the `exadt` dependencies:
