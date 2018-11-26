@@ -1,12 +1,14 @@
 #! /usr/bin/env python2.7
 
 import re, base64, string, random, os, subprocess, time, shutil, hashlib, uuid
+from py_compat import is_str
 # pwd is only available on UNIX systems
 try:
-    import pwd
+    import pwd, grp
 except ImportError:
     import getpass
     pwd = None
+    grp = None
 
 #{{{ Units to bytes
 
@@ -89,6 +91,121 @@ def get_username():
 
 #}}}
 
+#{{{ To uid
+def to_uid(uname):
+    """
+    Returns the user ID of the given username. If it's already an ID, it either returns it directly 
+    or converts it to an int if it's a string.
+    """
+    uid = None
+    # is it a string?
+    if is_str(uname):
+        # does the string contain a UID?
+        # YES -> convert to int
+        try:
+            uid = int(uname)
+        # NO -> convert to UID
+        except ValueError:
+            uid = pwd.getpwnam(uname).pw_uid
+    # NO -> it's already a valid uid, do nothing
+    else:
+        uid = uname
+    return uid
+#}}}
+ 
+#{{{ To uname
+def to_uname(uid):
+    """
+    Returns the username of the given user ID. ID can be an int or a string. If ID is already a username, returns it unmodified.
+    """
+    uname = None
+    # is it a string?
+    if is_str(uid):
+        # does the string contain a UID?
+        # YES -> convert to int and then to username
+        try:
+            uid = int(uid)
+            uname = pwd.getpwuid(uid).pw_name
+        # NO -> it's already a valid username, do nothing
+        except ValueError:
+            uname = uid
+    # NO -> convert uid to username
+    else:
+        uname = pwd.getpwuid(uid).pw_name
+    return uname
+#}}}
+ 
+#{{{ To gid
+def to_gid(gname):
+    """
+    Returns the group ID of the given groupname. If it's already an ID, it either returns it directly 
+    or converts it to an int if it's a string.
+    """
+    gid = None
+    # is it a string?
+    if is_str(gname):
+        # does the string contain a gid?
+        # YES -> convert to int
+        try:
+            gid = int(gname)
+        # NO -> convert to UID
+        except ValueError:
+            gid = grp.getgrnam(gname).gr_gid
+    # NO -> it's already a valid gid, do nothing
+    else:
+        gid = gname
+    return gid
+#}}}
+  
+#{{{ To gname
+def to_gname(gid):
+    """
+    Returns the groupname of the given group ID. ID can be an int or a string. If ID is already a groupname, returns it unmodified.
+    """
+    gname = None
+    # is it a string?
+    if is_str(gid):
+        # does the string contain a gig?
+        # YES -> convert to int and then to groupname
+        try:
+            gid = int(gid)
+            gname = grp.getgrgid(gid).gr_name
+        # NO -> it's already a valid groupname, do nothing
+        except ValueError:
+            gname = gid
+    # NO -> convert gid to groupname
+    else:
+        gname = grp.getgrgid(gid).gr_name
+    return gname
+#}}}
+ 
+#{{{ Get user gnames
+def get_user_gnames(user):
+    """
+    Returns a list of all local group names that the given user belongs to.
+    'user' may be a name or an ID.
+    """
+    uname = to_uname(user)
+    gnames = [ g.gr_name for g in grp.getgrall() if uname in g.gr_mem ]
+    #add primary group
+    gid = pwd.getpwnam(uname).pw_gid  
+    gnames.append(grp.getgrgid(gid).gr_name)
+    return gnames
+#}}}
+  
+#{{{ Get user gids
+def get_user_gids(user):
+    """
+    Returns a list of all local group IDs that the given user belongs to.
+    'user' may be a name or an ID.
+    """
+    uname = to_uname(user)
+    gids = [ g.gr_gid for g in grp.getgrall() if uname in g.gr_mem ]
+    #add primary group
+    gids.append(pwd.getpwnam(uname).pw_gid)
+    return gids
+#}}}
+ 
 #{{{ Get first interface
 def get_first_interface(timeout=1):
     """

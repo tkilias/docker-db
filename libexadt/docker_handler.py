@@ -311,14 +311,25 @@ class docker_handler:
             # --> only takes effect if "privileged == False" (otherwise all devices are accessible anyway)
             elif docker_conf.device_type == 'block':
                 for disk in my_conf.disks.itervalues():
-                    for dev, meta in disk.devices:
+                    for dev in disk.devices:
                         # FIXME : use mapping if given
                         dev_host = os.path.join(os.path.join(my_conf.docker_volume, self.exaconf.storage_dir), dev)
-                        dev_container = os.path.join(os.path.join(self.exaconf.container_root, self.exaconf.storage_dir), dev)
-                        meta_host = os.path.join(os.path.join(my_conf.docker_volume, self.exaconf.storage_dir), meta)
-                        meta_container = os.path.join(os.path.join(self.exaconf.container_root, self.exaconf.storage_dir), meta)
-                        devices.append(dev_host+":"+dev_container+":rwm")
-                        devices.append(meta_host+":"+meta_container+":rwm")
+                        # backwards compatibility: get filename tuple with extensions if device has meta file!
+                        # NOTE : EXAConf can only check the host path!
+                        compat_files = self.exaconf.check_fix_local_dev_path(dev_host)
+                        # a.) superblock device (new format)
+                        if compat_files[0] == dev_host:
+                            dev_container = os.path.join(os.path.join(self.exaconf.container_root, self.exaconf.storage_dir), dev)
+                            devices.append(dev_host+":"+dev_container+":rwm")
+                        # b.) device with meta device (old format)
+                        # --> append suffix to devices with meta device and also add meta device
+                        else:
+                            dev_host = compat_files[0]
+                            dev_container = os.path.join(os.path.join(self.exaconf.container_root, self.exaconf.storage_dir), dev + self.exaconf.data_dev_suffix)
+                            meta_host = compat_files[1]
+                            meta_container = os.path.join(os.path.join(self.exaconf.container_root, self.exaconf.storage_dir), dev + self.exaconf.meta_dev_suffix)
+                            devices.append(dev_host+":"+dev_container+":rwm")
+                            devices.append(meta_host+":"+meta_container+":rwm")
             # d. BucketFS volumes
             for bfs_name in bucketfs_conf.fs.keys():
                 bfs_conf = bucketfs_conf.fs[bfs_name]
@@ -327,7 +338,10 @@ class docker_handler:
                     bfs_container = os.path.join(self.exaconf.container_root, self.exaconf.bucketfs_dir, bfs_name)
                     binds.append(bfs_host + ":" + bfs_container + ":rw")
                     volumes.append(bfs_container)
-            # e. Additional volumes
+            # e. Default and additional volumes
+            for v in docker_conf.default_volumes:
+                binds.append(v)
+                volumes.append(v.split(":")[1].strip())
             for v in docker_conf.additional_volumes:
                 binds.append(v)
                 volumes.append(v.split(":")[1].strip())
@@ -551,7 +565,7 @@ class docker_handler:
 #}}}
 
 #{{{ Start cluster
-    def start_cluster(self, cmd=None, auto_remove=False, dummy_mode=False):
+    def start_cluster(self, cmd=None, auto_remove=False, dummy_mode=False, wait=False, wait_timeout=None):
         """
         Starts the given cluster by:
             - checking the available free space (in case of file-devices)
@@ -560,8 +574,9 @@ class docker_handler:
             - creating docker containers for all cluster-nodes
             - starting docker containers
         If 'dummy_mode' is true, all checks and preparations are skipped. Only containers are created 
-        and started. This can be used to execute arbitrary commands in the containers (if 'auto_remove'
-        is also true, these containers will be removed by Docker as soon as the container process exits).
+        and started. This can be used to execute arbitrary commands in the containers. If 'auto_remove'
+        is also true, these containers will be removed by Docker as soon as the container process exits.
+        If 'wait' is true, this function will wait 'wait_timeout' seconds for the containers to stop.
         """
 
         networks = None
@@ -630,6 +645,11 @@ class docker_handler:
             print "Error during startup! Cleaning up..."
             self.stop_cluster(30)            
             raise e
+
+        # 6. wait for containers to stop
+        if wait is True:
+            for c in containers:
+                self.client.wait(c, timeout=wait_timeout)
 #}}}
 
 #{{{ Stop cluster

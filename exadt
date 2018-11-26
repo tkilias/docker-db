@@ -1,6 +1,6 @@
 #! /usr/bin/env python2.7
 
-import sys, os, argparse, pprint, subprocess, time, tarfile, io, docker
+import sys, os, argparse, pprint, subprocess, time, tarfile, io, docker, ipaddr
 from libexadt import exadt_conf, docker_handler, device_handler, docker_rpc_handler, EXAConf, utils
 import shutil
 from libexadt.EXAConf import config
@@ -8,9 +8,10 @@ from libexadt.EXAConf import config
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.0.12"
+my_version = "6.1.0"
 info_arc_prefix = "exasol_docker_info"
 confirm_yes = False
+quiet_output = False
 
 #{{{ static variables for the "self contained image"
 sc_root = "/exa"
@@ -146,7 +147,10 @@ def delete_cluster(cmd):
         try:
             dh = docker_handler.docker_handler(quiet=True)
             dh.set_exaconf(exaconf)
-            dh.start_cluster(cmd = "rm -rf /exa", auto_remove=True, dummy_mode=True)
+            # -> wait for the 'rm containers' to finish
+            #    (avoids conflicts due to deleting the same files)
+            dh.start_cluster(cmd = "rm -rf /exa", auto_remove=True, dummy_mode=True, 
+                             wait=True, wait_timeout=10)
         except docker_handler.DockerError as e:
             print "Errors occured while trying to delete the root directory: %s" % e
         # delete the root-directory itself and the node directories
@@ -407,7 +411,10 @@ def init_sc(cmd):
             priv_net_up = False
             # search for the current network within the list of UP interfaces
             for up_if in local_ifs:
-                if priv_net == up_if[1]:
+                # NOTE: we only compare the IP address (without the network mask),
+                # in order to support strange network configurations like "192.168.10.10/32"
+                # (used within Google Cloud instances)
+                if ipaddr.IPNetwork(up_if[1]).ip == ipaddr.IPNetwork(priv_net).ip:
                     priv_net_up = True
                     break
             if not priv_net_up:
@@ -470,7 +477,7 @@ def init_sc(cmd):
         exaconf.config.write(outfile=sys.stdout)
         sys.exit(0)
     else:
-        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.0.12/libexec/exainit.py'
+        exainit_cmd = '/usr/opt/EXASuite-6/EXAClusterOS-6.1.0/libexec/exainit.py'
         log_err("exadt:: calling '%s'" % exainit_cmd)
         os.execl(exainit_cmd, exainit_cmd)
 #}}}
@@ -504,6 +511,8 @@ def create_node_dirs(node_root, exaconf):
         os.makedirs(os.path.join(node_root, exaconf.conf_ssl_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.conf_dwad_dir)):
         os.makedirs(os.path.join(node_root, exaconf.conf_dwad_dir))
+    if not os.path.exists(os.path.join(node_root, exaconf.conf_remote_volumes_dir)):
+        os.makedirs(os.path.join(node_root, exaconf.conf_remote_volumes_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.md_dir)):
         os.makedirs(os.path.join(node_root, exaconf.md_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.md_storage_dir)):
@@ -528,8 +537,6 @@ def create_node_dirs(node_root, exaconf):
         os.makedirs(os.path.join(node_root, exaconf.bucketfs_dir, exaconf.def_bucketfs))   
     if not os.path.exists(os.path.join(node_root, exaconf.docker_log_dir)):
         os.makedirs(os.path.join(node_root, exaconf.docker_log_dir))
-    if not os.path.exists(os.path.join(node_root, exaconf.drive_pool_dir)):
-        os.makedirs(os.path.join(node_root, exaconf.drive_pool_dir))
     if not os.path.exists(os.path.join(node_root, exaconf.device_pool_dir)):
         os.makedirs(os.path.join(node_root, exaconf.device_pool_dir))
 #}}}
@@ -545,6 +552,12 @@ def list_clusters(cmd):
     # build dict containg all information
     width = [len("CLUSTER"), len("ROOT"), len("IMAGE NAME"), len("IMAGE VERSION"), len("DB VERSION"), len("OS VERSION")]
     clusters_info = config()
+    # quiet output
+    if quiet_output is True:
+        for cluster in clusters.keys():
+            print cluster
+        return
+    # normal output
     for cluster,root in clusters.items():
         ci = config({"root" : os.path.normpath(root),
                      "image" : "<uninitialized>",
@@ -862,7 +875,7 @@ def execute(cmd):
     try:
         dh = docker_handler.docker_handler()
         dh.set_exaconf(exaconf)
-        dh.execute(cmd.command, all=cmd.all, quiet=cmd.quiet)
+        dh.execute(cmd.command, all=cmd.all, quiet=quiet_output)
     except docker_handler.DockerError as e:
         print e
         sys.exit(1)
@@ -1073,6 +1086,7 @@ def collect_info(cmd):
 # {{{ Main
 def main():
     global confirm_yes
+    global quiet_output
     
     parser = argparse.ArgumentParser(
             description = 'EXASOL Docker Tool',
@@ -1082,6 +1096,11 @@ def main():
             action='store_true',
             default=False,
             help='Do not ask for confirmations')
+    parser.add_argument(
+            '--quiet', '-q',
+            action='store_true',
+            default=False,
+            help='Less verbose output (for some commands)')
     cmdparser = parser.add_subparsers(
             title = 'commands',
             description = 'supported commands')
@@ -1347,11 +1366,6 @@ def main():
             '--all', '-a',
             action='store_true',
             help='Execute the given command on all running containers')
-    parser_ex.add_argument(
-            '--quiet', '-q',
-            action='store_true',
-            default=False,
-            help='Suppress all output, except from the given command')
     parser_ex.set_defaults(func=execute)
      
     # start-db command
@@ -1423,6 +1437,7 @@ def main():
 
     command = parser.parse_args()
     if command.yes: confirm_yes = True
+    if command.quiet: quiet_output = True
     command.func(command)
 
 if __name__ == '__main__':

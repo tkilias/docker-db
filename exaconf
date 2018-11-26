@@ -1,0 +1,524 @@
+#! /usr/bin/env python2.7
+
+import sys, os, argparse, time
+try:
+    from libexadt.EXAConf import EXAConf, EXAConfError
+    assert EXAConf, EXAConfError #silence pyflakes
+except ImportError:
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.1.0/lib')
+    from libconfd.EXAConf import EXAConf, EXAConfError
+
+my_version = "6.1.0"
+        
+#{{{ log_err
+def log_err(msg):
+    sys.stderr.write('[%s] %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg))
+#}}}
+
+# {{{ str2bool
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+# }}}
+
+# {{{ Read EXAConf
+def read_exaconf(filename, ro = False, initialized = False):
+    """
+    Checks and reads the given EXAConf file.
+    """
+
+    if not os.path.exists(filename):
+        log_err("EXAConf file '%s' does not exist!" % filename)
+        sys.exit(1)
+    if ro and not os.access(filename, os.R_OK):
+        log_err("EXAConf file '%s' is not readable by the current user!" % filename)
+        sys.exit(1)
+    if not ro and not os.access(filename, os.W_OK):
+        log_err("EXAConf file '%s' is not writable by the current user!" % filename)
+        sys.exit(1)
+    try:
+        exaconf = EXAConf(os.path.dirname(filename), False, filename=os.path.basename(filename))
+    except EXAConfError as e:
+        print e
+        sys.exit(1)
+    # Check if it's initialized (if requested)
+    if initialized and not exaconf.initialized():
+        log_err("EXAConf in '%s' is not inizalized!" % filename)
+        sys.exit(1)
+
+    return exaconf
+
+# }}}
+
+# {{{ Add node
+def add_node(cmd):
+    """
+    Adds a new node to the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.add_node(nid = cmd.id, priv_net=cmd.priv_net, pub_net=cmd.pub_net)
+# }}}
+ 
+# {{{ Remove node
+def remove_node(cmd):
+    """
+    Removes a node from the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.remove_node(nid = cmd.id, force=cmd.force)
+# }}}
+ 
+#{{{ Add node disk
+def add_node_disk(cmd):
+    """ 
+    Adds an empty storage disk to the given node in EXAConf.
+    """
+
+    exaconf = read_exaconf(cmd.exaconf)
+    devices = [ d.strip() for d in cmd.devices.split(",") if d.strip() != "" ] if cmd.devices else None
+    drives = [ d.strip() for d in cmd.drives.split(",") if d.strip() != "" ] if cmd.drives else None
+    exaconf.add_node_disk(cmd.node, cmd.disk, component = cmd.component, devices = devices, drives = drives, overwrite_existing = cmd.overwrite_existing)
+#}}}
+ 
+#{{{ Remove node disk
+def remove_node_disk(cmd):
+    """ 
+    Removes the given storage disk (or all disks) from the given node in EXAConf.
+    """
+
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.remove_node_disk(cmd.node, cmd.disk)
+#}}}
+  
+# {{{ Add node device
+def add_node_device(cmd):
+    """
+    Adds a device to an existing node in the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.add_node_device(cmd.node, cmd.disk, cmd.device, cmd.path)
+# }}}
+  
+# {{{ Remove node device
+def remove_node_device(cmd):
+    """
+    Removes a device from an existing node in the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.remove_node_device(cmd.node, cmd.disk, cmd.device)
+# }}}
+ 
+# {{{ Add volume
+def add_volume(cmd):
+    """
+    Adds a new volume to the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    vol_nodes = [ n.strip() for n in cmd.nodes.split(",") if n.strip() != "" ]
+    vol_owner = tuple( o.strip() for o in cmd.owner.split(":") if o.strip() != "" ) if cmd.owner != None else None
+    exaconf.add_volume(cmd.name, cmd.type, cmd.size, cmd.disk, cmd.redundancy, 
+                       vol_nodes, cmd.num_master_nodes, vol_owner, cmd.perm,
+                       cmd.labels, cmd.block_size, cmd.stripe_size)
+# }}}
+  
+# {{{ Add remote volume
+def add_remote_volume(cmd):
+    """
+    Adds a remote volume to the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.add_remote_volume(cmd.type, cmd.url, cmd.name, cmd.id, cmd.username, cmd.password, cmd.options)
+# }}}
+ 
+# {{{ Remove volume
+def remove_volume(cmd):
+    """
+    Removes the given volume from the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.remove_volume(cmd.name, cmd.force)
+# }}}
+  
+# {{{ Remove remote volume
+def remove_remote_volume(cmd):
+    """
+    Removes the given remote volume from the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.remove_remote_volume(name = cmd.name, ID = None, force=cmd.force)
+# }}}
+ 
+# {{{ Set storage conf
+def set_storage_conf(cmd):
+    """
+    Applies the given EXAStorage to the given EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    st_conf = exaconf.get_storage_conf()
+    if cmd.bg_rec_enabled is not None:
+        st_conf.bg_rec_enabled = cmd.bg_rec_enabled
+    if cmd.bg_rec_limit is not None:
+        st_conf.bg_rec_limit = cmd.bg_rec_limit
+    if cmd.space_warn_threshold is not None:
+        st_conf.space_warn_threshold = cmd.space_warn_threshold
+    exaconf.set_storage_conf(st_conf)
+# }}}
+ 
+# {{{ Main
+def main():
+
+    parser = argparse.ArgumentParser(
+            description = 'Command line tool for modifying EXAConf.',
+            prog = 'exaconf')
+    cmdparser = parser.add_subparsers(
+            title = 'commands',
+            description = 'supported commands')
+                                    
+    # add node command
+    parser_an = cmdparser.add_parser(
+            'add-node',
+            help='Add a new node to the given EXAConf.')
+    parser_an.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file.')
+    parser_an.add_argument(
+            '--priv-net', '-n',
+            type=str,
+            required = True,
+            help="Private network (e.g. '10.10.10.12/24'). Characters 'x' and 'X' in the IP are replaced with the node ID.")
+    parser_an.add_argument(
+            '--pub-net', '-N',
+            type=str,
+            required = False,
+            help="Public network (e.g. '10.10.0.12/24'). Characters 'x' and 'X' in the IP are replaced with the node ID.")
+    parser_an.add_argument(
+            '--id', '-i',
+            type = int,
+            required = False,
+            help='ID for the new node (automatically selected if omitted).')
+    parser_an.set_defaults(func=add_node)
+                                     
+    # remove node command
+    parser_rn = cmdparser.add_parser(
+            'remove-node',
+            help='Remove a node from the given EXAConf.')
+    parser_rn.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file.')
+    parser_rn.add_argument(
+            '--id', '-i',
+            type = int,
+            required = True,
+            help='ID of the node that should be removed.')
+    parser_rn.add_argument(
+            '--force', '-f',
+            action='store_true',
+            default=False,
+            help="Remove node even if it's in use by a volume or database.")
+    parser_rn.set_defaults(func=remove_node)
+
+    # add node device command
+    parser_and = cmdparser.add_parser(
+            'add-node-device',
+            help='Add a device to an existing node in the given EXAConf.')
+    parser_and.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file.')
+    parser_and.add_argument(
+            '--node', '-n',
+            type = int,
+            required = True,
+            help='Node ID')
+    parser_and.add_argument(
+            '--disk', '-D',
+            type=str,
+            required = True,
+            help="The disk that should contain the given device. Created if it does not exist.")
+    parser_and.add_argument(
+            '--device', '-d',
+            type=str,
+            required = True,
+            help="Device name (only the basename of the device file).")
+    parser_and.add_argument(
+            '--path', '-p',
+            type=str,
+            required = False,
+            help="Absolute path to the directory that contains the device file (if it's not in '/exa/data/storage/').")
+    parser_and.set_defaults(func=add_node_device)
+                                      
+    # remove node device command
+    parser_rnd = cmdparser.add_parser(
+            'remove-node-device',
+            help='Remove a device from an existing node in the given EXAConf. The disk is also removed if it does not contain other devices.')
+    parser_rnd.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file')
+    parser_rnd.add_argument(
+            '--node', '-n',
+            type = int,
+            required = True,
+            help='Node ID')
+    parser_rnd.add_argument(
+            '--disk', '-D',
+            type=str,
+            required = True,
+            help="The disk that contains the given device")
+    parser_rnd.add_argument(
+            '--device', '-d',
+            type=str,
+            required = True,
+            help="Device name (only the basename of the device file)")
+    parser_rnd.set_defaults(func=remove_node_device)
+                                       
+    # add node disk command
+    parser_andi = cmdparser.add_parser(
+            'add-node-disk',
+            help="Add an disk to an existing node in the given EXAConf. Use 'add-node-device' to add a disk with devices.")
+    parser_andi.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file')
+    parser_andi.add_argument(
+            '--node', '-n',
+            type = int,
+            required = True,
+            help='Node ID')
+    parser_andi.add_argument(
+            '--disk', '-D',
+            type=str,
+            required = True,
+            help="Name of the disk that should be added.")
+    parser_andi.add_argument(
+            '--component', '-c',
+            type=str,
+            required = False,
+            help="The component that should use this disk (default: 'exastorage').")
+    parser_andi.add_argument(
+            '--devices', '-d',
+            type=str,
+            required = False,
+            help="Comma-separated list of device names.")
+    parser_andi.add_argument(
+            '--drives', '-r',
+            type=str,
+            required = False,
+            help="Comma-separated list of drive IDs.")
+    parser_andi.add_argument(
+            '--overwrite-existing', '-O',
+            action='store_true',
+            required = False,
+            help="Overwrite any existing disk with the same name.")
+    parser_andi.set_defaults(func=add_node_disk)
+                                        
+    # remove node disk command
+    parser_rndi = cmdparser.add_parser(
+            'remove-node-disk',
+            help='Remove a disk (or all disks) from an existing node in the given EXAConf.')
+    parser_rndi.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file')
+    parser_rndi.add_argument(
+            '--node', '-n',
+            type = int,
+            required = True,
+            help='Node ID')
+    parser_rndi.add_argument(
+            '--disk', '-D',
+            type=str,
+            required = True,
+            help="The disk that should be removed ('all' for all disks).")
+    parser_rndi.set_defaults(func=remove_node_disk)
+                                         
+    # add volume command
+    parser_av = cmdparser.add_parser(
+            'add-volume',
+            help='Add a new volume to the given EXAConf.')
+    parser_av.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file')
+    parser_av.add_argument(
+            '--name', '-n',
+            type = str,
+            required = True,
+            help='Name of the new volume (must be unqiue in the cluster).')
+    parser_av.add_argument(
+            '--type', '-t',
+            type=str,
+            required = True,
+            help="Type of the new volume ('data', 'archive' or 'remote').")
+    parser_av.add_argument(
+            '--size', '-s',
+            type=str,
+            required = True,
+            help="Size of the new volume, e.g. 1TiB, 20GiB, 20000000B, etc..")
+    parser_av.add_argument(
+            '--disk', '-d',
+            type=str,
+            required = True,
+            help="Disk to be used for the new volume.")
+    parser_av.add_argument(
+            '--redundancy', '-r',
+            type=str,
+            required = True,
+            help="Redundancy of the new volume.")
+    parser_av.add_argument(
+            '--nodes', '-N',
+            type=str,
+            required = True,
+            help="Comma-separated list of node IDs, e.g. '11,12,13'.")
+    parser_av.add_argument(
+            '--num-master-nodes', '-m',
+            type=int,
+            help="Number of master nodes (default: same as nr. of nodes in '--nodes').")
+    parser_av.add_argument(
+            '--owner', '-o',
+            type=str,
+            help="User and group ID, e. g. '1000:10001' (default: current user and group ID).")
+    parser_av.add_argument(
+            '--perm', '-p',
+            type=str,
+            help="Permissions for the new volume, e. g. 'rw-r--r--' (default: 'rwx------').")
+    parser_av.add_argument(
+            '--labels', '-l',
+            type=str,
+            help="Comma separated list of labels, e. g. 'best,volume,ever' (default: None).")
+    parser_av.add_argument(
+            '--block-size', '-B',
+            type=int,
+            help="Block-size in bytes (default: 4096).")
+    parser_av.add_argument(
+            '--stripe-size', '-S',
+            type=int,
+            help="Stripe-size in bytes (default: 262144).")
+    parser_av.set_defaults(func=add_volume)
+                                          
+    # add remote volume command
+    parser_arv = cmdparser.add_parser(
+            'add-remote-volume',
+            help='Add a new volume to the given EXAConf.')
+    parser_arv.add_argument(
+            'exaconf', 
+            type=str, 
+            metavar='EXACONF',
+            help='The EXAConf file')
+    parser_arv.add_argument(
+            '--name', '-n',
+            type = str,
+            required = True,
+            help='Name of the remote volume (must be unqiue in the cluster, generated autom. if omitted)')
+    parser_arv.add_argument(
+            '--type', '-t',
+            type=str,
+            required = True,
+            help="Type of the volume ('smb', 'ftp' or 's3').")  
+    parser_arv.add_argument(
+            '--id', '-i',
+            type=int,
+            help="ID of the volume (automatically generated if omitted).")  
+    parser_arv.add_argument(
+            '--url', '-u',
+            type=str,
+            required = True,
+            help="URL for the remote volume, e.g. 'smb://my.remote.server/share (default: None).")
+    parser_arv.add_argument(
+            '--username', '-U',
+            type=str,
+            help="Username for accessing the remote volume' (default: None).")
+    parser_arv.add_argument(
+            '--password', '-P',
+            type=str,
+            help="Password for accessing the remote volume' (default: None).")
+    parser_arv.add_argument(
+            '--options', '-o',
+            type=str,
+            help="Additional options for the remote volume' (default: None).")
+    parser_arv.set_defaults(func=add_remote_volume)
+
+    # remove volume command
+    parser_rv = cmdparser.add_parser(
+            'remove-volume',
+            help = 'Remove a volume from the given EXAConf.')
+    parser_rv.add_argument(
+            'exaconf',
+            type = str,
+            metavar = 'EXACONF',
+            help = 'The EXAConf file')
+    parser_rv.add_argument(
+            '--name', '-n',
+            type = str,
+            required = True,
+            help='Name of the volume to be removed')
+    parser_rv.add_argument(
+            '--force', '-f',
+            action='store_true',
+            default=False,
+            help="remove volume even if it's in use by a database")
+    parser_rv.set_defaults(func=remove_volume)
+ 
+    # remove remote volume command
+    parser_rrv = cmdparser.add_parser(
+            'remove-remote-volume',
+            help = 'Remove a remote volume from the given EXAConf.')
+    parser_rrv.add_argument(
+            'exaconf',
+            type = str,
+            metavar = 'EXACONF',
+            help = 'The EXAConf file')
+    parser_rrv.add_argument(
+            '--name', '-n',
+            type = str,
+            required = True,
+            help='Name of the remote volume to be removed')
+    parser_rrv.add_argument(
+            '--force', '-f',
+            action='store_true',
+            default=False,
+            help="remove remote volume even if it's in use by a database")
+    parser_rrv.set_defaults(func=remove_remote_volume)
+  
+    # set storage conf command
+    parser_ssc = cmdparser.add_parser(
+            'set-storage-conf',
+            help = 'Set configurable EXAStorage parameters.')
+    parser_ssc.add_argument(
+            'exaconf',
+            type = str,
+            metavar = 'EXACONF',
+            help = 'The EXAConf file')
+    parser_ssc.add_argument(
+            '--bg-rec-enabled', '-r',
+            type = str2bool,
+            help='Enable or disable background recovery / data restoration (does not affect on-demand recovery)')
+    parser_ssc.add_argument(
+            '--bg-rec-limit', '-l',
+            type = int,
+            help="Max. throughput for the background recovery / data restoration (in MiB/s)")
+    parser_ssc.add_argument(
+            '--space-warn-threshold', '-t',
+            type = int,
+            help="Space usage threshold (in percent, per node) for sending a warning")
+    parser_ssc.set_defaults(func=set_storage_conf)
+ 
+    command = parser.parse_args()
+    command.func(command)
+ # }}}
+
+if __name__ == '__main__':
+    main()

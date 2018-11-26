@@ -1,5 +1,7 @@
+# -*- mode: python -*-
+
 import sys, os, stat, ipaddr, configobj, StringIO, hashlib, re
-from utils import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid
+from utils import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, to_uid, to_uname
 from collections import OrderedDict as odict
 
 #{{{ Class EXAConfError
@@ -73,6 +75,7 @@ class EXAConf:
     job_id_file = "next.id"
     conf_ssl_dir = "etc/ssl"
     conf_dwad_dir = "etc/dwad"
+    conf_remote_volumes_dir = "etc/remote_volumes/"
     md_dir = "metadata"
     md_storage_dir = "metadata/storage"
     md_dwad_dir = "metadata/dwad"
@@ -81,10 +84,9 @@ class EXAConf:
     cored_log_dir = "logs/cored"
     db_log_dir = "logs/db"
     docker_log_dir = "logs/docker"
-    drive_pool_dir = "sys/drives"
     device_pool_dir = "sys/devices"
     node_uuid = "etc/node_uuid"
-    valid_platforms = ['docker', 'vm']
+    valid_platforms = ['docker', 'vm', 'aws', 'azure']
     valid_vol_types = ['data', 'archive', 'remote']
     valid_remote_vol_types = ['smb', 'ftp', 's3']
     remote_vol_id_offset = 10000
@@ -100,6 +102,7 @@ class EXAConf:
     def_xmlrpc_port = 80
     def_docker_privileged = True
     def_docker_network_mode = "bridge"
+    def_docker_volumes = ['/dev:/dev:rw','/run/udev:/run/udev:rw','/run/lm:/run/lvm:rw','/lib/modules:/lib/modules:ro']
     def_jdbc_driver_dir = "drivers/jdbc"
     def_oracle_driver_dir = "drivers/oracle"
     def_vol_block_size = 4096 # block-size in bytes
@@ -112,6 +115,7 @@ class EXAConf:
     def_space_warn_threshold = 90 #percent
     def_bg_rec_limit_1gb = 75 #recovery limit (1GBit)
     def_bg_rec_limit_10gb = 300 #recovery limit (10GBit)
+    def_disk_component = 'exastorage'
 #}}}
 
 #{{{ Init
@@ -130,7 +134,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.12"
+        self.version = "6.1.0"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -898,7 +902,31 @@ class EXAConf:
         except ValueError:
             return False
 #}}}
+  
+#{{{ Get network prefix len
+    def get_net_pref_len(self, net):
+        """
+        Returns the prefix len of the given network (or -1 if network is not valid).
+        """
+        try:
+            plen = ipaddr.IPNetwork(net).prefixlen
+            return plen
+        except ValueError:
+            return -1
+#}}}
 
+#{{{ Get network string
+    def get_net_str(self, net):
+        """
+        Converts the given string to a full network string (e.g. by adding the prefixlen).
+        """
+        try:
+            res = str(ipaddr.IPNetwork(net))
+            return res
+        except ValueError:
+            raise EXAConfError("Failed to convert '%s' to an IP network." % net)
+#}}}
+ 
 #{{{ IP type
     def ip_type(self, ip):
         """
@@ -966,8 +994,14 @@ class EXAConf:
         # replace 'x' and 'X' in IP with the node ID
         if priv_net != None:
             priv_net = re.sub('[xX]+', str(node_id), priv_net)
+            if not self.net_is_valid(priv_net):
+                raise EXAConfError("String '%s' is not a valid network (valid example: '10.10.10.11/16')!" % priv_net)
+            priv_net = self.get_net_str(priv_net)
         if pub_net != None:
             pub_net = re.sub('[xX]+', str(node_id), pub_net)
+            if not self.net_is_valid(pub_net):
+                raise EXAConfError("String '%s' is not a valid network (valid example: '10.10.10.11/16')!" % pub_net)
+            pub_net = self.get_net_str(pub_net)
 
         # create the node section
         node_sec_name = "Node : " + str(node_id)
@@ -979,7 +1013,7 @@ class EXAConf:
         node_sec["UUID"] = gen_node_uuid()
         # Add device template in template mode (given device is ignored)
         if template_mode:
-            node_sec["Disk : default"] = {"Devices" : "dev.1 #'dev.1.data' and 'dev.1.meta' files must be located in '%s'" 
+            node_sec["Disk : default"] = {"Devices" : "dev.1 #'dev.1' must be located in '%s'" 
                     % os.path.join(self.container_root, self.storage_dir)}
         # Docker specific options:
         if self.get_platform() == "Docker":
@@ -1051,50 +1085,54 @@ class EXAConf:
         for node in nodes.items():
             if node_id == "all" or node[0] == node_id:
                 node_sec = self.config["Node : " + str(node[0])]
-                if "name" in node_conf.keys():
+                if "name" in node_conf:
                     node_sec["Name"] = node_conf.name
-                if "uuid" in node_conf.keys():
+                if "uuid" in node_conf:
                     node_sec["UUID"] = str(node_conf.uuid)
-                if "private_net" in node_conf.keys():
+                if "private_net" in node_conf:
                     node_sec["PrivateNet"] = node_conf.private_net
-                if "public_net" in node_conf.keys():
+                if "public_net" in node_conf:
                     node_sec["PublicNet"] = node_conf.public_net
-                if "private_ip" in node_conf.keys():
+                if "private_ip" in node_conf:
                     if "PrivateNet" in node_sec.scalars and node_sec["PrivateNet"].strip() != "":
-                        node_sec["PrivateNet"] = "/".join([node_conf.private_ip, node_sec["PrivateNet"].split("/")[1]])
+                        node_sec["PrivateNet"] = "/".join([node_conf.private_ip, str(self.get_net_pref_len(node_sec["PrivateNet"]))])
                     else:
                         raise EXAConfError("Public IP given for node %s but it has no public network!" % node_id)
-                if "public_ip" in node_conf.keys():
+                if "public_ip" in node_conf:
                     if "PublicNet" in node_sec.scalars and node_sec["PublicNet"].strip() != "":
-                        node_sec["PublicNet"] = "/".join([node_conf.public_ip, node_sec["PublicNet"].split("/")[1]])
+                        node_sec["PublicNet"] = "/".join([node_conf.public_ip, str(self.get_net_pref_len(node_sec["PublicNet"]))])
                     else:
                         raise EXAConfError("Public IP '%s' given for node %s but it has no public network!" % (node_conf.public_ip, node_id))
-                if "docker_volume" in node_conf.keys():
+                if "docker_volume" in node_conf:
                     node_sec["DockerVolume"] = os.path.basename(node_conf.docker_volume)
-                if "exposed_ports" in node_conf.keys():
+                if "exposed_ports" in node_conf:
                     ports = ", ".join([":".join([str(p[0]), str(p[1])]) for p in node_conf.exposed_ports])
                     node_sec["ExposedPorts"] = ports 
-                if "private_interface" in node_conf.keys():
+                if "private_interface" in node_conf:
                     node_sec["PrivateInterface"] = node_conf.private_interface
-                if "public_interface" in node_conf.keys():
+                if "public_interface" in node_conf:
                     node_sec["PublicInterface"] = node_conf.public_interface
                 # disks
                 # a.) delete disks that don't exist in the node_conf
                 if remove_disks is True:
                     for sect in tuple(node_sec.sections):
-                        if self.is_disk(sect) and self.get_section_id(sect) not in node_conf.disks.keys():
+                        if self.is_disk(sect) and self.get_section_id(sect) not in node_conf.disks:
                             del node_sec[sect]
                 # b.) update / add disks
-                if "disks" in node_conf.keys():
+                if "disks" in node_conf:
                     for name, disk in node_conf.disks.items():
                         disk_sec = odict()
                         if name in node_sec.sections:
                             disk_sec = node_sec[name]
-                        if "devices" in disk.keys():
-                            disk_sec["Devices"] = ", ".join([ d[0][:-len(self.data_dev_suffix)] for d in disk.devices ])
-                        if "mapping" in disk.keys():
+                        if "component" in disk:
+                            disk_sec["Component"] = disk.component
+                        if "devices" in disk:
+                            disk_sec["Devices"] = ", ".join(disk.devices)
+                        if "drives" in disk:
+                            disk_sec["Drives"] = ", ".join(disk.drives)
+                        if "mapping" in disk:
                             disk_sec["Mapping"] = ", ".join([":".join([m[0], m[1]]) for m in disk.mapping ])
-                        if "direct_io" in disk.keys():
+                        if "direct_io" in disk and disk.direct_io is False: # omit 'True' since it's the default case
                             disk_sec["DirectIO"] = str(disk.direct_io)                        
                         node_sec["Disk : " + name] = disk_sec
 
@@ -1153,7 +1191,7 @@ class EXAConf:
 # {{{ Add remote volume
     def add_remote_volume(self, vol_type, url, name = None, ID = None,
                           labels = None, username = None, password = None, 
-                          options = None, commit = True):
+                          options = None, owner = None, commit = True):
         """
         Adds a new remote volume to the EXAConf.
         """
@@ -1185,9 +1223,14 @@ class EXAConf:
         vol_sec["ID"] = ID
         vol_sec["URL"] = url
         vol_sec["Username"] = username if username is not None else "anonymous"
-        vol_sec["Password"] = password if password is not None else ""
+        vol_sec["Password"] = password if password is not None else ""   
+        if owner:
+            vol_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
+        else:
+            vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
+        # optional values
         if labels:
-            vol_sec["Labels"] = [ str(l) for l in config.labels ]
+            vol_sec["Labels"] = [ str(l) for l in labels ]
         if options:
             vol_sec["Options"] = options
 
@@ -1320,7 +1363,8 @@ class EXAConf:
                                    vol_conf.username if "username" in vol_conf else None,
                                    vol_conf.password if "password" in vol_conf else None,
                                    vol_conf.labels if "labels" in vol_conf else None,
-                                   vol_conf.options if "options" in vol_conf else None)
+                                   vol_conf.options if "options" in vol_conf else None,
+                                   vol_conf.owner if "owner" in vol_conf else None)
             # nothing to change, since the ID can't be "all"
             return
 
@@ -1339,6 +1383,8 @@ class EXAConf:
                     vol_sec["Labels"] = [ str(l) for l in vol_conf.labels ]
                 if "options" in vol_conf:
                     vol_sec["Options"] = vol_conf.options
+                if "owner" in vol_conf:
+                    vol_sec["Owner"] = vol_conf.owner
 
         self.commit()
 #}}}
@@ -1891,10 +1937,10 @@ class EXAConf:
                 node_conf.id = nid
                 node_conf.name = node_sec["Name"]
                 if node_sec["PrivateNet"].strip() != "":
-                    node_conf.private_net = node_sec["PrivateNet"]
+                    node_conf.private_net = self.get_net_str(node_sec["PrivateNet"])
                     node_conf.private_ip = node_conf.private_net.split("/")[0]
                 if node_sec["PublicNet"].strip() != "":
-                    node_conf.public_net = node_sec["PublicNet"]
+                    node_conf.public_net = self.get_net_str(node_sec["PublicNet"])
                     node_conf.public_ip = node_conf.public_net.split("/")[0]
                 node_conf.uuid = node_sec["UUID"]
                 # storage disks
@@ -1905,9 +1951,14 @@ class EXAConf:
                         disk_conf = config()
                         disk_conf.name = self.get_section_id(subsec)
                         # optional disk values
+                        if "Component" in disk_sec.scalars:
+                            disk_conf.component = disk_sec["Component"]
+                        else:
+                            disk_conf.component = self.def_disk_component
                         if "Devices" in disk_sec.scalars:
-                            devices = [ dev.strip() for dev in disk_sec["Devices"].split(",") if dev.strip() != "" ]
-                            disk_conf.devices = [ (dev+self.data_dev_suffix, dev+self.meta_dev_suffix) for dev in devices ]
+                            disk_conf.devices = [ dev.strip() for dev in disk_sec["Devices"].split(",") if dev.strip() != "" ]
+                        if "Drives" in disk_sec.scalars:
+                            disk_conf.drives = [ dri.strip() for dri in disk_sec["Drives"].split(",") if dri.strip() != "" ]
                         if "Mapping" in disk_sec.scalars:
                             # the device-mapping entries, as they are found in the EXAConf file
                             disk_conf.mapping = [ (m.split(":")[0].strip(), m.split(":")[1].strip()) for m in disk_sec["Mapping"].split(",") if m.strip() != "" ]
@@ -1915,12 +1966,9 @@ class EXAConf:
                             # --> converted to absolute paths, so they can be directly used by the docker-handler 
                             disk_conf.mapped_devices = []
                             for dev, path in disk_conf.mapping:
-                                meta_dev_host = os.path.join(path, dev) + self.meta_dev_suffix
-                                meta_dev_container = os.path.join(self.container_root, self.storage_dir, dev + self.meta_dev_suffix)
-                                disk_conf.mapped_devices.append((meta_dev_host, meta_dev_container))
-                                data_dev_host = os.path.join(path, dev) + self.data_dev_suffix
-                                data_dev_container = os.path.join(self.container_root, self.storage_dir, dev + self.data_dev_suffix)
-                                disk_conf.mapped_devices.append((data_dev_host, data_dev_container))
+                                dev_host = os.path.join(path, dev)
+                                dev_container = os.path.join(self.container_root, self.storage_dir, dev)
+                                disk_conf.mapped_devices.append((dev_host, dev_container))
                         if "DirectIO" in disk_sec.scalars:
                             disk_conf.direct_io = disk_sec.as_bool("DirectIO")
                         else:
@@ -2207,6 +2255,32 @@ class EXAConf:
         return res
 #}}}
 
+#{{{ Get os dir
+    def get_os_dir(self):
+        """
+        Returns the absolute path to EXAClusterOS (with the same version number as the EXAConf).
+        """
+        return self.os_dir
+#}}}
+ 
+#{{{ Get db dir
+    def get_db_dir(self):
+        """
+        Returns the absolute path to EXASolution (with the same version number as the EXAConf).
+        """
+        return self.db_dir
+#}}}
+ 
+#{{{ Get user remote volumes file
+    def get_user_remote_volumes_file(self, user):
+        """
+        Returns the absolute path to the given user's remote volume configuration file.
+        """
+        cf = os.path.join(self.container_root, self.conf_remote_volumes_dir, 
+                          to_uname(user) + "." + str(to_uid(user)) + ".conf")
+        return cf
+#}}}
+
 #{{{ Filter configs
     def filter_configs(self, configs, filters):
         """
@@ -2227,24 +2301,36 @@ class EXAConf:
 ################### SIMPLE API (dedicated functions for selected actions) ##############
   
 #{{{ Add node disk
-    def add_node_disk(self, node_id, disk):
+    def add_node_disk(self, node_id, disk, component = None, devices = None, drives = None,
+                      overwrite_existing = False):
         """
-        Adds an empty disk to the given node in the EXAConf. 
+        Adds a new disk to the given node in EXAConf. 
         
-        Use 'add_node_device' to add a disk with devices.
+        - 'component' is a string that denotes the component that should use this disk: ['exastorage'|'db'|'swap']
+        - 'devices' is a list of device names
+        - 'drives' is a list of drive IDs
+        - 'overwrite_existing' will overwrite an existing disk with the same name
+
+        If both 'devices' and 'drives' are given, 'devices' will take precedence. If only 'drives' is given,
+        the drives in that list will be used to create new devices for the disk (during the next startup).
         """
 
         nodes_conf = self.get_nodes()
         if str(node_id) not in nodes_conf.keys():
             raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
         node_conf = nodes_conf[str(node_id)]
-        if "disks" in node_conf.keys():
-            if disk in node_conf.disks.keys():
-                raise EXAConfError("Node %s alrady contains disk '%s'." % (str(node_id), disk))
-            else:
-                node_conf.disks[disk] = config()
-        else:
-            node_conf["disks"] = {disk: None}
+        # check if a disk with same name already exists
+        if "disks" in node_conf and disk in node_conf.disks and overwrite_existing is False:
+            raise EXAConfError("Node %s alrady contains disk '%s'." % (str(node_id), disk))
+        # create entry for the disk
+        disk_entry = config()
+        if component is not None:
+            disk_entry.component = component
+        if devices is not None:
+            disk_entry.devices = devices
+        if drives is not None:
+            disk_entry.drives = drives
+        node_conf.disks[disk] = disk_entry
         
         self.set_node_conf(node_conf, node_conf.id)
 #}}}
@@ -2273,29 +2359,26 @@ class EXAConf:
 #{{{ Add node device
     def add_node_device(self, node_id, disk, device, path = None):
         """ 
-        Adds the given device as a storage device to the given node.
-        If 'disk' does not exist on the given node, it will be created.
-        If 'path' is specified, a mapping is also added. 
+        Adds the given device to the given disk on the given node. If 'path' is specified, a mapping is also added. 
+
+        The given disk has to exist (can be created with 'add_node_disk()').
         """
 
         nodes_conf = self.get_nodes()
-        if str(node_id) not in nodes_conf.keys():
+        if str(node_id) not in nodes_conf:
             raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
         node_conf = nodes_conf[str(node_id)]
-        # get / create disk(s) entry
-        node_disks = config()
-        if "disks" in node_conf.keys():
-            node_disks = node_conf.disks
-        if disk not in node_disks.keys():
-            node_disks[disk] = config()
-            node_disks[disk].devices = []
+        if "disks" not in node_conf or disk not in node_conf.disks:
+            raise EXAConfError("Node %s does not have a disk named '%s'." % (str(node_id), disk))
+        node_disks = node_conf.disks
         # add devices
-        dev_tuple = (device+self.data_dev_suffix, device+self.meta_dev_suffix)
-        if dev_tuple in node_disks[disk].devices:
+        if "devices" not in node_disks[disk]:
+            node_disks[disk].devices = []
+        elif device in node_disks[disk].devices:
             raise EXAConfError("Disk '%s' of node %s already contains device '%s'." % (disk, str(node_id), device))
-        node_disks[disk].devices.append(dev_tuple)
+        node_disks[disk].devices.append(device)
         if path and path != "":
-            if "mapping" not in node_disks[disk].keys():
+            if "mapping" not in node_disks[disk]:
                 node_disks[disk].mapping = []
             node_disks[disk].mapping.append((device,path))
         
@@ -2308,7 +2391,7 @@ class EXAConf:
         Removes the given device from the node and disk. Also deletes the disk
         if it does not contain other devices and 'remove_empty_disk' is True.
         """
-      
+        
         nodes_conf = self.get_nodes()
         if str(node_id) not in nodes_conf.keys():
             raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
@@ -2321,7 +2404,7 @@ class EXAConf:
         if "devices" not in node_disks[disk].keys():
             raise EXAConfError("Disk '%s' of node %s does not have any devices." % (disk, node_id))
         # delete device
-        node_disks[disk].devices = [ d for d in node_disks[disk].devices if d[0] != str(device + self.data_dev_suffix) ]
+        node_disks[disk].devices = [ d for d in node_disks[disk].devices if d != device ]
         if len(node_disks[disk].devices) == 0:
             del node_disks[disk]["devices"]
         # delete mapping
@@ -2473,9 +2556,37 @@ class EXAConf:
             conf.network_mode = docker_sec["NetworkMode"]
         else:
             conf.network_mode = self.def_docker_network_mode
+        if "DefaultVolumes" in docker_sec.scalars: # may be emtpy string to deactivate them
+            conf.default_volumes = [v.strip() for v in docker_sec["DefaultVolumes"].split(",") if v.strip() != ""]
+        else:
+            conf.default_volumes = self.def_docker_volumes
         if "AdditionalVolumes" in docker_sec.scalars and docker_sec["AdditionalVolumes"] != "":
             conf.additional_volumes = [v.strip() for v in docker_sec["AdditionalVolumes"].split(",") if v.strip() != ""]
         else:
             conf.additional_volumes = []
         return conf
 #}}}
+
+############################# UTILITY FUNCTIONS #################################
+
+# {{{ Check fix local dev path
+    def check_fix_local_dev_path(self, dev_file):
+        """
+        Compatibility function: checks if the given device has a meta file (old format)
+        and returns a tuple of the data and metafile path if so (see SPOT-6478).
+
+        ONLY WORKS FOR LOCAL FILES!
+        """
+        try:
+            # NOTE: don't use 'isfile()' because it returns False for block device files
+            if os.path.exists(dev_file):
+                return (dev_file,)
+            else:
+                data_file = dev_file + self.data_dev_suffix
+                if os.path.exists(data_file):
+                    return (data_file, dev_file + self.meta_dev_suffix)
+                else:
+                    raise EXAConfError("Could not find device file '%s'!" % dev_file)
+        except Exception as e:
+            raise EXAConfError("Failed to check device file '%s': %s" % (dev_file, e))
+# }}}

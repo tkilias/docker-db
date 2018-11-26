@@ -1,6 +1,6 @@
 #! /usr/bin/env python2.7
 
-import os, glob
+import os
 import EXAConf
 from utils import bytes2units
 from collections import OrderedDict as odict
@@ -85,9 +85,9 @@ class device_handler:
 
 #{{{ Check free space
     def check_free_space(self):
-        """ 
+        """
         Checks if the sum of the size of all sparse files is bigger
-        than the free space on the associated device.                             
+        than the free space on the associated device.
         """
 
         devices = set()
@@ -97,7 +97,7 @@ class device_handler:
             docker_conf = self.exaconf.get_docker_conf()
         except EXAConf.EXAConfError as e:
             raise DeviceError("Unable to read EXAConf: %s" % e)
- 
+
         if docker_conf.device_type != "file":
             raise DeviceError("Space-check is only supported for file-devices!")
 
@@ -108,13 +108,19 @@ class device_handler:
             for disk in my_conf.disks.itervalues():
                 if "mapped_devices" in disk:
                     for host_path, c in disk.mapped_devices:
-                        devices.add(host_path)
+                        # backwards compatibility: get filename tuple with extensions if device has meta file!
+                        compat_files = self.exaconf.check_fix_local_dev_path(host_path)
+                        for f in compat_files:
+                            devices.add(f)
             # add "normal" file-devices
             for disk in my_conf.disks.itervalues():
-                for dev, meta in disk.devices:
+                for dev in disk.devices:
                     if not self.is_mapped_device(dev, disk):
-                        devices.add(os.path.join(os.path.join(my_conf.docker_volume, self.exaconf.storage_dir), dev))
-                        devices.add(os.path.join(os.path.join(my_conf.docker_volume, self.exaconf.storage_dir), meta))
+                        dev_file = os.path.join(os.path.join(my_conf.docker_volume, self.exaconf.storage_dir), dev)
+                        # backwards compatibility: get filename tuple with extensions if device has meta file!
+                        compat_files = self.exaconf.check_fix_local_dev_path(dev_file)
+                        for f in compat_files:
+                            devices.add(f)
 
         # organize devices according to their filesystem
         for dev in devices:
@@ -138,25 +144,30 @@ class device_handler:
         """ Checks if the given filename indicates a storage device file. """
         return self.exaconf.dev_prefix in name
 #}}}
- 
+
  #{{{ Is data device file
     def is_data_device_file(self, name):
         """ Checks if filename indicates a storage DATA device file. """
         return self.exaconf.dev_prefix in name and self.exaconf.data_dev_suffix in name
 #}}}
-  
+
  #{{{ Is meta device file
     def is_meta_device_file(self, name):
-        """ Checks if filename indicates a storage META device file. """
+        """ 
+        Checks if filename indicates a storage META device file.
+
+        (deprecated for superblock devices, but kept for backwards compatibility)
+        """
+
         return self.exaconf.dev_prefix in name and self.exaconf.meta_dev_suffix in name
 #}}}
- 
-#{{{ Get file names
-    def get_file_names(self, storage_dir, node_conf, check_foreign):
-        """ 
-        Returns a tuple of valid data/meta file names for the given directory.     
-        The names are created based on the entries in EXAConf, because there      
-        may be multiple directories containing device files (if mapping is used). 
+
+#{{{ Get file name
+    def get_file_name(self, storage_dir, node_conf, check_foreign):
+        """
+        Returns a valid device file name for the given directory.
+        The name is created based on the entries in EXAConf, because there
+        may be multiple directories containing device files (if mapping is used).
         """
 
         #check for foreign files if requested
@@ -169,25 +180,26 @@ class device_handler:
             foreign_files = [f for f in files if not self.is_device_file(f)]
             if len(foreign_files) > 0:
                 raise DeviceError("Found foreign files in '%s' that need to be removed first: %s" % (storage_dir, foreign_files))
- 
+
         # build a list of all node devices 
         devices = []
         for disk in node_conf.disks.itervalues():
-            for dev, meta in disk.devices:
+            for dev in disk.devices:
                 devices.append(dev)
         # find the highest number
         curr_num = 1
         if len(devices) > 0:
             curr_num = max([int(dev.split(".")[1]) for dev in devices]) + 1
-        data_file = os.path.join(storage_dir, self.exaconf.dev_prefix + str(curr_num) + self.exaconf.data_dev_suffix)
-        meta_file = os.path.join(storage_dir, self.exaconf.dev_prefix + str(curr_num) + self.exaconf.meta_dev_suffix)
-        return data_file, meta_file
+        dev_file = os.path.join(storage_dir, self.exaconf.dev_prefix + str(curr_num))
+        return dev_file
 #}}}
 
 #{{{ Get short  name
     def get_short_name(self, dev_name):
-        """ 
+        """
         Returns the short name (i. e. without the suffix) of the given device.
+
+        (deprecated for superblock devices, but kept for backwards compatibility)
         """
 
         short_name = dev_name
@@ -200,7 +212,7 @@ class device_handler:
 
 #{{{ Remove file devices
     def remove_file_devices(self, docker_root, node_conf):
-        """ 
+        """
         Deletes all existing file-devices (incl. mapped devices) and removes them from EXAConf.
         Keeps the existing directories.
         """
@@ -216,16 +228,18 @@ class device_handler:
                         path = os.path.dirname(path)
                     directories.append(path)
         directories.append(os.path.join(os.path.join(docker_root, node_conf.docker_volume), self.exaconf.storage_dir))
-        deleted_devices = []
+        deleted_devices = set()
 
+        # we remove ALL files (no sub-folders) because we don't know if there are "old style" devices (with meta files)
         for d in directories:
-            data_files = glob.glob(os.path.join(d, self.exaconf.dev_prefix + "*" + self.exaconf.data_dev_suffix))
-            meta_files = glob.glob(os.path.join(d, self.exaconf.dev_prefix + "*" + self.exaconf.meta_dev_suffix))
-
-            for df,mf in zip(data_files, meta_files):
-                deleted_devices.append(self.get_short_name(df))
-                os.unlink(df)
-                os.unlink(mf)
+            for f in os.listdir(d):
+                fpath = os.path.join(d, f)
+                try:
+                    if os.path.isfile(fpath):
+                        os.unlink(fpath)
+                        deleted_devices.add(self.get_short_name(fpath))
+                except Exception as e:
+                    print "Failed to delete device file '%s': " % (fpath, e)
 
         self.exaconf.remove_node_disk(node_conf.id, disk="all")
         return deleted_devices
@@ -233,24 +247,24 @@ class device_handler:
 
 #{{{ Create node file devices
     def create_node_file_devices(self, node_id, disk, num, size, path, replace):
-        """ 
-        Creates $num data (sparese) files of size $size (and their meta files) for a single node 
-        and adds them to EXAConf. If 'path' is not empty, the devices are created there and 
-        corresponding mapping entries are added to EXAConf.                                         
-
-        Returns a tuple of two dicts: created and deleted devices.                               
         """
- 
+        Creates $num data (sparese) files of size $size for a single node and adds them to EXAConf.
+        If 'path' is not empty, the devices are created there and corresponding mapping entries
+        are added to EXAConf.
+
+        Returns a tuple of two dicts: created and deleted devices.
+        """
+
         try:
             docker_conf = self.exaconf.get_docker_conf()
             nodes_conf = self.exaconf.get_nodes()
         except EXAConf.EXAConfError as e:
             raise DeviceError("Failed to read EXAConf: %s" % e)
- 
+
         # sanity checks
         if docker_conf.device_type != 'file':
             raise DeviceError("Cluster has wrong DeviceType '%s'! Data files can only be used for clusters with DeviceType 'file'!" % docker_conf.device_type)
- 
+
         disk = disk.strip()
         dest_dir = ""
         created_node_devices = []
@@ -267,24 +281,22 @@ class device_handler:
             # refresh config after deletion
             nodes_conf = self.exaconf.get_nodes()
             my_conf = nodes_conf[node_id]
+        # create disk if it doesn't exist
+        if "disks" not in my_conf or disk not in my_conf.disks:
+            self.exaconf.add_node_disk(node_id, disk, component='exastorage')
         for i in range(num):
-            data_file, meta_file = self.get_file_names(dest_dir, my_conf, False)
-            # check if files already exist
+            dev_file = self.get_file_name(dest_dir, my_conf, False)
+            # check if file already exists
             # --> can happen easily in case of external mappings
-            if os.path.exists(data_file) and not replace:
-                raise DeviceError("File '%s' already exists! Please remove it." % data_file)
-            if os.path.exists(meta_file) and not replace:
-                raise DeviceError("File '%s' already exists! Please remove it." % meta_file)
-            # create sparse files
-            with open(data_file, "wb") as d:
+            if os.path.exists(dev_file) and not replace:
+                raise DeviceError("File '%s' already exists! Please remove it." % dev_file)
+            # create sparse file
+            with open(dev_file, "wb") as d:
                 d.truncate(size)
-            with open(meta_file, "wb") as m:
-                m.truncate(4096)
             # add device to EXAConf
-            short_name = self.get_short_name(data_file)
             try:
                 self.exaconf.add_node_device(node_id, disk,
-                                             os.path.basename(short_name),
+                                             os.path.basename(dev_file),
                                              path if path and path != "" else None)
                 # we need to refresh the node configuration for each device, 
                 # otherwise the names would be wrong when adding multiple devices at once!
@@ -293,21 +305,21 @@ class device_handler:
             except EXAConf.EXAConfError as e:
                 raise DeviceError("Failed to read EXAConf: %s" % e)
             # store only short-name
-            created_node_devices.append(short_name)
+            created_node_devices.append(dev_file)
 
         return (created_node_devices, deleted_node_devices)
 #}}}
 
 #{{{ Create file devices
     def create_file_devices(self, disk, num, size, path, replace):
-        """ 
-        Creates $num data (sparse) files of size $size (and their meta files) for all nodes 
-        and adds them to EXAConf. If 'path' is not empty, the devices are created there and 
-        corresponding mapping entries are added to EXAConf.                                         
-
-        Returns a tuple of two dicts: created and deleted devices per node. 
         """
-        
+        Creates $num data (sparse) files of size $size for all nodes and adds them to EXAConf.
+        If 'path' is not empty, the devices are created there and corresponding mapping entries
+        are added to EXAConf.
+
+        Returns a tuple of two dicts: created and deleted devices per node.
+        """
+
         try:
             nodes_conf = self.exaconf.get_nodes()
         except EXAConf.EXAConfError as e:

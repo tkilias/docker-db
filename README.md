@@ -21,6 +21,8 @@ Currently supported features:
 
 [Creating a multi-host EXASOL cluster (by connecting multiple containers)](#creating-a-multi-host-exasol-cluster)
 
+[Enlarging an EXAStorage device](#enlarging-an-exastorage-device)
+
 [Installing custom JDBC drivers](#installing-custom-jdbc-drivers)
 
 [Installing Oracle drivers](#installing-oracle-drivers)
@@ -62,6 +64,8 @@ The `exadt` command-line tool is used to create, initialize, start, stop, update
 ## 0. Preliminaries
 
 The installation steps below assume that you have `pipenv` installed on your Docker host system.
+
+**NOTE: there are multiple major versions of Exasol in the Github and Docker repositories, therefore it may be better to use the desired version nr. instead of the `latest` tag with all `git` and `docker` commands.** 
 
 - Pull the image to your Docker host:
   ```console
@@ -364,7 +368,7 @@ The EXAConf template has to be completed before the cluster can be started. You 
 #### The EXAStorage devices on all nodes:
 ```console
 [[Disk : default]]
-        Devices = dev.1    #'dev.1.data' and 'dev.1.meta' files must be located in '/exa/data/storage'
+        Devices = dev.1    #'dev.1' must be located in '/exa/data/storage'
 ```
 
 **NOTE: You can leave this entry as it is if you create the devices as described below.**
@@ -406,13 +410,15 @@ Copy the `$HOME/exa_template/` directory to all cluster nodes (the exact path is
 You can create the EXAStorage device files by executing (on each node):
 
 ```console
-$ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1.data bs=1M count=1 seek=999
-$ touch $HOME/exa_template/data/storage/dev.1.meta
+$ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1 bs=1M count=1 seek=999
+$ touch $HOME/exa_template/data/storage/dev.1
 ```
 
-This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data and also a file that holds the metadata for that device. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.
+This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.
 
-**NOTE: Alternatively you can partition a block-device (the meta partition needs only 2 MB) and create device files (using `mknod`) named `dev.1.data` and `dev.1.meta` in the same directory.**
+**NOTE: Alternatively you can use an existing block-device by creating a special device file with the corresponding major and minor number (using `mknod`) named `dev.1` in the same directory.**
+
+**NOTE: The data file (or device) should be slightly bigger (~1%) than the required space for the volume, because a part of it will be reserved for metadata and checksums.**
  
 ## 5. Start the cluster
 
@@ -424,6 +430,27 @@ $ docker run --detach --network=host --privileged -v $HOME/exa_template:/exa exa
 
 **NOTE: this example uses the host network stack, i. e. the containers are directly accessing a host interface to connect to each other. There is no need to expose ports in this mode: they are all accessible on the host.**
 
+# Enlarging an EXAStorage device
+
+If you need to enlarge the device file of an existing EXASOL container, you can use the following commands to do so:
+
+### 1. Open a terminal in the container:
+
+$ docker exec -ti <containername> /bin/bash
+
+### 2. Enlarge the device file physically (e. g. by 10GB):
+
+$ truncate --size=+10GB /exa/data/storage/dev.1.data
+
+**NOTE: the path may also be `/exa/data/storage/dev.1` (i. e. without the `data` suffix) in versions > 6.0.12**
+
+### 3. Enlarge the device logically (i. e. tell EXAStorage about the new size):
+
+$ cshdd --enlarge -n 11 -h /exa/data/storage/dev.1[.data]
+
+**NOTE: `-n` is the node ID**
+
+### 4. Repeat these steps for all devices and containers
 
 # Installing custom JDBC drivers
 
