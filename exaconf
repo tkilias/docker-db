@@ -5,10 +5,10 @@ try:
     from libexadt.EXAConf import EXAConf, EXAConfError
     assert EXAConf, EXAConfError #silence pyflakes
 except ImportError:
-    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.1.0/lib')
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.0.13/lib')
     from libconfd.EXAConf import EXAConf, EXAConfError
 
-my_version = "6.1.0"
+my_version = "6.0.13"
         
 #{{{ log_err
 def log_err(msg):

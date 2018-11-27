@@ -65,11 +65,11 @@ The `exadt` command-line tool is used to create, initialize, start, stop, update
 
 The installation steps below assume that you have `pipenv` installed on your Docker host system.
 
-**NOTE: there are multiple major versions of Exasol in the Github and Docker repositories, therefore it may be better to use the desired version nr. instead of the `latest` tag with all `git` and `docker` commands.** 
+**NOTE: there are multiple major versions of Exasol in the Github and Docker repositories, therefore it's better to use the desired version nr. instead of the `latest` tag with all `git` and `docker` commands.** 
 
 - Pull the image to your Docker host:
   ```console
-  $ docker pull exasol/docker-db:latest
+  $ docker pull exasol/docker-db:<version>
   ```
 - Install `exadt`:
   ```console
@@ -118,7 +118,7 @@ After creating a cluster it has to be initialized. Mandatory parameters are:
 - the type of EXAStorage devices (currently only 'file' is supported)
 
 ```console
-$ ./exadt init-cluster --image exasol/docker-db:latest --license ./license/license.xml --auto-storage MyCluster
+$ ./exadt init-cluster --image exasol/docker-db:<version> --license ./license/license.xml --auto-storage MyCluster
 Successfully initialized configuration in '/home/user/MyCluster/EXAConf'.
 Successfully initialized root directory '/home/user/MyCluster/'.
 ```
@@ -242,9 +242,9 @@ A cluster can be updated by exchanging the EXASOL Docker image (but it has to be
 
 ```console
 $ git pull
-$ docker pull exasol/docker-db:latest
+$ docker pull exasol/docker-db:<version>
 $ pipenv install -r exadt_requirements.txt
-$ ./exadt update-cluster --image exasol/docker-db:latest MyCluster
+$ ./exadt update-cluster --image exasol/docker-db:<version> MyCluster
 Cluster 'MyCluster' has been successfully updated!
 - Image :  exasol/docker-db:6.0.0-d1 --> exasol/docker-db:6.0.0-d2
 - DB    :  6.0.0                     --> 6.0.1
@@ -277,7 +277,7 @@ A cluster has to be stopped before it can be deleted (even if all containers are
 Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an EXASOL container from the EXASOL docker image using the following command:
 
 ```console
-$ docker run --name exasoldb -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120  exasol/docker-db:latest
+$ docker run --name exasoldb -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120  exasol/docker-db:<version>
 ```
 
 In this example port 8888 (within the container) is exposed on the local port 8899. Use this port to connect to the DB.
@@ -285,7 +285,7 @@ In this example port 8888 (within the container) is exposed on the local port 88
 All data is stored within the container and lost when the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
 
 ```console
-$ docker run --name exasoldb  -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:latest
+$ docker run --name exasoldb  -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:<version>
 ```
 
 See [the Docker volumes documentation](https://docs.docker.com/engine/tutorials/dockervolumes/) for more examples on how to create and manage persistent volumes.
@@ -338,7 +338,7 @@ First you have to create the configuration for the cluster. There are two possib
 Execute the following command (`--num-nodes` is the number of containers in the cluster):
 
 ```console
-$ docker run -v $HOME/exa_template:/exa --rm -i exasol/docker-db:latest init-sc --template --num-nodes 3
+$ docker run -v $HOME/exa_template:/exa --rm -i exasol/docker-db:<version> init-sc --template --num-nodes 3
 ```
 
 After the command has finished, the directory `$HOME/exa_template` contains all subdirectories as well as an EXAConf template (in `/etc`). The EXAConf is also printed to stdout.
@@ -350,7 +350,7 @@ After the command has finished, the directory `$HOME/exa_template` contains all 
 You can create a template file and redirect it to wherever you want by executing: 
 
 ```console
-$ docker run --rm -i exasol/docker-db:latest init-sc --template --num-nodes 3 > ~/MyExaConf
+$ docker run --rm -i exasol/docker-db:<version> init-sc --template --num-nodes 3 > ~/MyExaConf
 ```
 
 **NOTE: we recommend to create an /exa/ template directory and the following steps assume that you did so. If you choose to only create the EXAConf file, you have to build a new Docker image with it and create the EXAStorage devices files within that image.**
@@ -425,7 +425,7 @@ This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data.
 The cluster is started by creating all containers individually and passing each of them its ID from the EXAConf. For `n11` the command would be:
 
 ```console
-$ docker run --detach --network=host --privileged -v $HOME/exa_template:/exa exasol/docker-db:latest init-sc --node-id 11
+$ docker run --detach --network=host --privileged -v $HOME/exa_template:/exa exasol/docker-db:<version> init-sc --node-id 11
 ```
 
 **NOTE: this example uses the host network stack, i. e. the containers are directly accessing a host interface to connect to each other. There is no need to expose ports in this mode: they are all accessible on the host.**

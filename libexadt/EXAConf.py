@@ -116,6 +116,7 @@ class EXAConf:
     def_bg_rec_limit_1gb = 75 #recovery limit (1GBit)
     def_bg_rec_limit_10gb = 300 #recovery limit (10GBit)
     def_disk_component = 'exastorage'
+    def_gui_subdir = "share/exagui/"
 #}}}
 
 #{{{ Init
@@ -134,7 +135,7 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.1.0"
+        self.version = "6.0.13"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.img_version = self.version
@@ -2279,6 +2280,14 @@ class EXAConf:
         cf = os.path.join(self.container_root, self.conf_remote_volumes_dir, 
                           to_uname(user) + "." + str(to_uid(user)) + ".conf")
         return cf
+#}}}
+
+#{{{ Get gui dir
+    def get_gui_dir(self):
+        """
+        Returns the full path to the directory containing the GUI files (aka. the "GUI web root").
+        """
+        return os.path.join(self.get_os_dir(), self.def_gui_subdir)
 #}}}
 
 #{{{ Filter configs
