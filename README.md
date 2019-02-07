@@ -410,8 +410,11 @@ Copy the `$HOME/exa_template/` directory to all cluster nodes (the exact path is
 You can create the EXAStorage device files by executing (on each node):
 
 ```console
+$ truncate -s 1G $HOME/exa_template/data/storage/dev.1
+```
+or (alternatively):
+```console
 $ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1 bs=1M count=1 seek=999
-$ touch $HOME/exa_template/data/storage/dev.1
 ```
 
 This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.
