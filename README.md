@@ -241,7 +241,7 @@ As stated above, the containers are deleted when a cluster is stopped, but the r
 A cluster can be updated by exchanging the EXASOL Docker image (but it has to be stopped first):
 
 ```console
-$ git pull
+$ git pull <version>
 $ docker pull exasol/docker-db:<version>
 $ pipenv install -r exadt_requirements.txt
 $ ./exadt update-cluster --image exasol/docker-db:<version> MyCluster
