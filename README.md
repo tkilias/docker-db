@@ -1,9 +1,9 @@
-# EXASOL Docker version
+# Exasol Docker version
 
-EXASOL is a high-performance, in-memory, MPP database specifically designed for analytics. 
-This repository contains a dockerized version of the EXASOL DB for testing purpose.
+Exasol is a high-performance, in-memory, MPP database specifically designed for analytics. 
+This repository contains a dockerized version of the Exasol DB for testing purpose.
 
-###### Please note that this is an open source project which is *not officially supported* by EXASOL. We will try to help you as much as possible, but can't guarantee anything since this is not an official EXASOL product.
+###### Please note that this is an open source project which is *not officially supported* by Exasol. We will try to help you as much as possible, but can't guarantee anything since this is not an official Exasol product.
 
 Currently supported features:
 - create / start / stop a database in a virtual cluster
@@ -15,13 +15,15 @@ Currently supported features:
 # Table of contents
 [Requirements](#requirements)
 
-[Using the EXASOL Docker tool (`exadt`)](#using-the-exasol-docker-tool)
+[Recommendations](#recommendations)
 
-[Creating a stand-alone EXASOL container (`docker run`)](#creating-a-stand-alone-exasol-container)
+[Creating a stand-alone Exasol container (`docker run`)](#creating-a-stand-alone-exasol-container)
 
-[Creating a multi-host EXASOL cluster (by connecting multiple containers)](#creating-a-multi-host-exasol-cluster)
+[Creating a multi-host Exasol cluster (by connecting multiple containers)](#creating-a-multi-host-exasol-cluster)
 
-[Enlarging an EXAStorage device](#enlarging-an-exastorage-device)
+[Managing disks and devices](#managing-disks-and-devices)
+
+[Using the Exasol Docker tool (`exadt`)](#using-the-exasol-docker-tool)
 
 [Installing custom JDBC drivers](#installing-custom-jdbc-drivers)
 
@@ -38,28 +40,307 @@ Currently supported features:
  
 ## Docker
 
-`exadt` and the EXASOL Docker image have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 3.2.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
+The Exasol Docker image and `exadt` CLI tool have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 3.2.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
  
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
  
 ## Host OS
 
-`exadt` currently only supports Docker on Linux. If you are using a Windows host you'd have to create a Linux VM.
+We currently only support Docker on Linux. If you are using a Windows host you'd have to create a Linux VM.
 
-The host OS must support O_DIRECT access for the EXASOL containers, which may not be the case for Docker on Mac (see [Troubleshooting](#troubleshooting)).
+The host OS must support O_DIRECT access for the Exasol containers (see [Troubleshooting](#troubleshooting)).
 
 ## Host environment
 
+### Memory
+Each database instance needs at least **2 GiB RAM**. We recommend that the host reserves at least **4 GiB RAM** for each running Exasol container.
+
+### Services
+
+Make sure that **NTP** is configured correctly on the host. Also, the **RNG** daemon must be running in order to provide enough entropy for the Exasol services in the container.
+
+### Packages
 If you like to use our `exadt` tool, you'll need to install `git` and `pipenv`. `pipenv` is used to create virtual environments for Python projects (see [https://docs.pipenv.org/](https://docs.pipenv.org/)). Using `pipenv` makes it easy to install the required versions of all `exadt` dependencies without affecting your host environment. You can install `pipenv` using `pip` or your favorite package management system.                 
 
-Each database instance needs **2 GiB RAM**. We recommend that the host reserves at least **4 GiB RAM** for each running EXASOL container.
+# Recommendations
+ 
+## Performance optimization
+
+We strongly recommend to set the CPU governor on the host to `performance`, in order to avoid serious performance problems. There are various tools to do that, depending on your distribution. Usually, the following command works:
+```console
+for F in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance >$F; done
+```
+
+## Hugepages
+
+We recommend to enable hugepages for hosts with at lease 64GB RAM. In order to do so, you have to set the `Hugepages` option in EXAConf to either `auto`, `host` or the nr. of hugepages per container. 
+
+If you set it `auto`, the nr. of hugepages will be determined automatically, depending on the DB settings. 
+
+When setting it to `host` the nr. of hugepages from the host system will be used (i. e. `/proc/sys/vm/nr_hugepages` will not be changed). However, `/proc/sys/vm/hugetlb_shm_group` will always be set to an internal value!
+ 
+## Resource limitation
+
+It's possible to limit the resources of your Exasol container with the following `docker run` options: 
+```console
+docker run --cpuset-cpus="1,2,3,4" --memory=20g --memory-swap=20g --memory-reservation=10g exasol/docker-db:<version>
+```
+This is especially recommended if you have multiple Exasol containers (or other services) on the same host. In that case, you should evenly distribute the available CPUs and memory throughout your Exasol containers.
+
+See [https://docs.docker.com/config/containers/resource_constraints/](https://docs.docker.com/config/containers/resource_constraints/) for more options.
+
+# Creating a stand-alone Exasol container
+
+Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an Exasol container from the Exasol docker image using the following command:
+
+```console
+$ docker run --name exasoldb -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120  exasol/docker-db:<version>
+```
+
+In this example port 8888 (within the container) is exposed on the local port 8899. Use this port to connect to the DB.
+
+## Making the data of a container persistent
+
+All data, configuration and logfiles of an Exasol container are stored below `/exa`. With the command above, this data is lost when the container is removed. However, you can make it persistent by mounting a volume into the container at `/exa`, for example:
+
+```console
+$ docker run --name exasoldb  -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:<version>
+```
+
+See [the Docker volumes documentation](https://docs.docker.com/engine/tutorials/dockervolumes/) for more examples on how to create and manage persistent volumes.
+
+## Stopping an Exasol container
+
+It is important to make sure that the database has been shut down correctly before stopping a container. A high stop-timeout (see example above) increases the chance that the DB can be shut down gracefully before the container is stopped, but it's not guaranteed. It's better to stop the DB manually by executing the following command within the container (after attaching to it):
+
+```console
+$ dwad_client stop-wait DB1
+```
+
+Or from outside the container:
+
+```console
+$ docker exec -ti exasoldb dwad_client stop-wait DB1
+```
+
+## Updating the persistent volume of a stand-alone Exasol container
+
+Starting with version 6.0.3-d1, an existing persistent volume can be updated (for use with a later version of an Exasol image) by calling the following command with the *new* image:
+
+```console
+$ docker run --rm -v exa_volume:/exa exasol/docker-db:<new version> update-sc
+```
+
+If everything works correctly, you should see output similar to this:
+
+```console
+Updating EXAConf '/exa/etc/EXAConf' from version '6.0.2' to '6.0.3'
+Container has been successfully updated!
+- Image ver. :  6.0.2-d1 --> 6.0.3-d1
+- DB ver.    :  6.0.2 --> 6.0.3
+- OS ver.    :  6.0.2 --> 6.0.3
+```
+
+After that, a new container can be created (from the new image) using the old / updated volume.
 
 
-# Using the EXASOL Docker Tool
+# Creating a multi-host Exasol cluster
 
-The `exadt` command-line tool is used to create, initialize, start, stop, update and delete a Docker based EXASOL cluster.
+Starting with version 6.0.7-d1, it's possible to create multiple containers on different hosts and connect them to a cluster (one container per host). 
 
-**NOTE: exadt currently only supports single-host-clusters. See [Creating a multi-host EXASOL cluster](#creating-a-multi-host-exasol-cluster) for how to create a multi-host-cluster (with one container per host).**
+## 1. Create the configuration 
+
+First you have to create the configuration for the cluster. There are two possible ways to do so:
+ 
+### a. Create an /exa/ directory that stores all persistent data from one container (RECOMMENDED):
+
+Execute the following command (`--num-nodes` is the number of containers in the cluster):
+
+```console
+$ export CONTAINER_EXA="$HOME/container_exa/"
+$ docker run -v "$CONTAINER_EXA":/exa --rm -i exasol/docker-db:<version> init-sc --template --num-nodes 3
+```
+
+After the command has finished, the directory `$CONTAINER_EXA` contains all subdirectories as well as an EXAConf template (in `/etc`). 
+
+**NOTE: you man need to add `--privileged` if the host directory belongs to root.**
+ 
+### b. Create an EXAConf template
+
+You can create a template file and redirect it to wherever you want by executing: 
+
+```console
+$ docker run --rm -i exasol/docker-db:<version> -q init-sc --template --num-nodes 3 -p > ~/MyExaConf
+```
+
+**NOTE: we recommend creating an /exa/ template directory and the following steps assume that you did so. If you choose to only create the EXAConf file, you have to build a new Docker image with it and create the EXAStorage devices files within that image.**
+
+## 2. Complete the configuration
+
+The configuration has to be completed before the cluster can be started.
+
+#### Private network of all nodes:
+```console
+[Node : 11]
+    PrivateNet = 10.10.10.11/24 # <-- replace with the real network
+```
+You can also change the IP using the `exaconf` CLI tool from the Exasol image:
+```console
+docker run --rm -v $CONTAINER_EXA:/exa exasol/docker-db:<version> exaconf modify-node -n 11 -p 10.10.10.11/24
+```
+
+#### EXAStorage devices on all nodes:
+```console
+[[Disk : disk1]]
+    Devices = dev.1    #'dev.1' must be located in '/exa/data/storage'
+```
+
+For more information on device management, see [Managing disks and devices](#managing-disks-and-devices).
+
+**NOTE: You can leave this entry as it is if you create the devices as described below.**
+
+#### EXAVolume sizes:
+```console
+[EXAVolume : DataVolume1]
+    Type = data
+    Nodes = 11, 12, 13
+    Disk = disk1
+    # Volume size (e. g. '1 TiB')
+    Size =  # <-- enter volume size here
+```
+You can also change the volume size using the `exaconf` CLI tool from the Exasol image:
+```console
+docker run --rm -v $CONTAINER_EXA:/exa exasol/docker-db:<version> exaconf modify-volume -n DataVolume1 -s 1TiB
+```
+  
+#### Network port numbers (optional)
+
+If you are using the host network mode (see "Start the cluster" below), you may have to adjust the port numbers used by the Exasol services. The one that's most likely to collide is the SSH daemon, which is using the well-known port 22. You can change it in EXAConf:
+```console
+[Global]
+    SSHPort = 22  # <-- replace with any unused port number
+```
+
+The other Exasol services (e. g. Cored, BucketFS and the DB itself) are using port numbers above 1024. However, you can change them all by editing EXAConf.
+ 
+#### Nameservers (optional):
+```console
+[Global]
+    ...
+    # Comma-separated list of nameservers for this cluster.
+    NameServers =
+```
+ 
+## 3. Copy the configuration to all nodes
+
+Copy `$CONTAINER_EXA` to all cluster nodes (the exact path is not relevant, but should be identical on all nodes).
+
+## 4. Create the EXAStorage device files
+
+You can create device files by executing (**on each node**):
+
+```console
+$ truncate -s 1G $CONTAINER_EXA/data/storage/dev.1
+```
+
+This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.
+
+**IMPORTANT: Each device should be slightly bigger (~1%) than the required space for the volume(s), because a part of it will be reserved for metadata and checksums.**
+
+For more information on device management, see [Managing disks and devices](#managing-disks-and-devices).
+
+## 5. Start the cluster
+
+The cluster is started by creating all containers individually and passing each of them its ID from the EXAConf. For `n11` the command would be:
+
+```console
+$ docker run --detach --network=host --privileged -v $CONTAINER_EXA:/exa exasol/docker-db:<version> init-sc --node-id 11
+```
+
+**NOTE: this example uses the host network stack, i. e. the containers are directly accessing a host interface to connect to each other. There is no need to expose ports in this mode: they are all accessible on the host.**
+ 
+# Managing disks and devices
+ 
+All EXAStorage devices have to be located below `/exa/data/storage/` (within the container). 
+
+## Creating EXAStorage file devices
+
+You can create file devices by executing (**on each node**):
+
+```console
+$ truncate -s 1G $CONTAINER_EXA/data/storage/dev.2
+```
+or (alternatively):
+```console
+$ dd if=/dev/zero of=$CONTAINER_EXA/data/storage/dev.2 bs=1M count=1 seek=999
+```
+
+This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data. Adjust the size to your needs. 
+
+**NOTE:** you can also create the files in any place you like and mount them to `/exa/data/storage/` with `docker run -v /path/to/dev.x:/exa/data/storage/dev.x`.
+
+**IMPORTANT: Each device should be slightly bigger (~1%) than the required space for the volume(s), because a part of it will be reserved for metadata and checksums.**
+
+## Adding devices to EXAConf
+
+After the devices have been created, they need to be added to EXAConf. You can either do this manually by editing EXAConf:
+
+```console
+[Node : 11]
+    [[Disk : disk1]]
+        Devices = dev.1, dev.2
+```
+or use the `exaconf` CLI tool from the Exasol image:
+```console
+docker run --rm -v $CONTAINER_EXA:/exa exasol/docker-db:<version> exaconf add-node-device -D disk1 -d dev.2 -n 11
+```
+
+## Adding disks to EXAConf
+
+You can add additional disks to each node in EXAConf (a `disk` is a group of devices that is assigned to a volume). This may be useful if you want to use different devices for different volumes.
+
+Similar to adding devices, you can either manually edit EXAConf:
+```console
+[Node : 11]
+    [[Disk : disk1]]
+        Devices = dev.1, dev.2
+    [[Disk : disk2]]
+        Devices = dev.3, dev.4
+```
+or use the `exaconf` CLI tool from the Exasol image:
+```console
+docker run --rm -v $CONTAINER_EXA:/exa exasol/docker-dev-6.1.2:juk exaconf add-node-disk -D disk2 -n 11
+docker run --rm -v $CONTAINER_EXA:/exa exasol/docker-db:<version> exaconf add-node-device -D disk2 -d dev.3 -n 11
+docker run --rm -v $CONTAINER_EXA:/exa exasol/docker-db:<version> exaconf add-node-device -D disk2 -d dev.4 -n 11
+```
+**NOTE: Don't forget to copy the modified EXAConf to all other nodes.**
+
+## Enlarging an EXAStorage file device
+
+If you need to enlarge a file device of an existing Exasol container, you can use the following commands to do so:
+
+### 1. Open a terminal in the container:
+
+$ docker exec -ti <containername> /bin/bash
+
+### 2. Physically enlarge the file (e. g. by 10GB):
+
+$ truncate --size=+10GB /exa/data/storage/dev.1
+
+**NOTE: the path may also be `/exa/data/storage/dev.1.data` (i. e. with `data` as suffix) in versions < 6.0.13**
+
+### 3. Logically enlarge the device (i. e. tell EXAStorage about the new size):
+
+$ cshdd --enlarge --node-id 11 -h /exa/data/storage/dev.1[.data]
+
+### 4. Repeat these steps for all devices and containers
+ 
+
+# Using the Exasol Docker Tool
+
+The `exadt` command-line tool is used to create, initialize, start, stop, update and delete a Docker based Exasol cluster.
+
+**NOTE: exadt currently only supports single-host-clusters. See [Creating a multi-host Exasol cluster](#creating-a-multi-host-exasol-cluster) for how to create a multi-host-cluster (with one container per host).**
  
 ## 0. Preliminaries
 
@@ -73,7 +354,7 @@ The installation steps below assume that you have `pipenv` installed on your Doc
   ```
 - Install `exadt`:
   ```console
-  $ git clone https://github.com/EXASOL/docker-db.git <version>
+  $ git clone https://github.com/Exasol/docker-db.git <version>
   $ cd docker-db
   ```
 - Install the `exadt` dependencies:
@@ -84,7 +365,7 @@ The installation steps below assume that you have `pipenv` installed on your Doc
   ```console
   $ pipenv shell
   ```
-- Create and configure your virtual EXASOL cluster by using the commands described in the `exadt` documentation below.
+- Create and configure your virtual Exasol cluster by using the commands described in the `exadt` documentation below.
 
 **IMPORTANT** : all `exadt` commands listed below have to be executed within the shell spawned by the `pipenv shell` command! Alternatively, you can use `pipenv run ./exadt`.
  
@@ -113,7 +394,7 @@ $ ./exadt list-clusters
 
 After creating a cluster it has to be initialized. Mandatory parameters are:
 
-- the EXASOL Docker image 
+- the Exasol Docker image 
 - the license file
 - the type of EXAStorage devices (currently only 'file' is supported)
 
@@ -147,7 +428,7 @@ Node 11 : ['/home/user/MyCluster/n11/data/storage/dev.1']
 
 As you can see, the file devices are created within the `data/storage` subdirectory of each node's Docker root. They are created as *sparse files*, i. e. their size is stated as the given size but they actually have size 0 and grow as new data is being written.
 
-All devices must be assigned to a 'disk'. A disk is a group of devices that can be assigned to an EXAStorage volume. The disk name can be specified with the `--disk` parameter. If omitted, the newly created devices will be assigned to the disk named 'default'.
+All devices must be assigned to a 'disk'. A disk is a group of devices that can be assigned to an EXAStorage volume. The disk name can be specified with the `--disk` parameter. If omitted, the newly created devices will be assigned to the disk named 'disk1'.
 
 ### Assigning devices to volumes
 
@@ -162,10 +443,10 @@ After creating the devices, they have to be assigned to the corresponding volume
     Redundancy = 1
 ```
 
-Now add the name of the disk ('default', if you did not specify a name when executing `create-file-devices`) and the volume size, e. g:
+Now add the name of the disk ('disk1', if you did not specify a name when executing `create-file-devices`) and the volume size, e. g:
 
 ```
-    Disk = default
+    Disk = disk1
     Size = 100GiB
 ```
 
@@ -238,10 +519,10 @@ As stated above, the containers are deleted when a cluster is stopped, but the r
  
 ## 7. Updating a cluster
 
-A cluster can be updated by exchanging the EXASOL Docker image (but it has to be stopped first):
+A cluster can be updated by exchanging the Exasol Docker image (but it has to be stopped first):
 
 ```console
-$ git pull
+$ git pull <version>
 $ docker pull exasol/docker-db:<version>
 $ pipenv install -r exadt_requirements.txt
 $ ./exadt update-cluster --image exasol/docker-db:<version> MyCluster
@@ -270,187 +551,6 @@ Successfully removed cluster 'MyCluster'.
 Note that all file devices (even the mapped ones) and the root directory are deleted. You can use `--keep-root` and `--keep-mapped-devices` in order to prevent this.
 
 A cluster has to be stopped before it can be deleted (even if all containers are down)!
-
-
-# Creating a stand-alone EXASOL container
-
-Starting with version 6.0.2-d1, there is no more separate "self-contained" image version. You can simply create an EXASOL container from the EXASOL docker image using the following command:
-
-```console
-$ docker run --name exasoldb -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120  exasol/docker-db:<version>
-```
-
-In this example port 8888 (within the container) is exposed on the local port 8899. Use this port to connect to the DB.
-
-All data is stored within the container and lost when the container is removed. In order to make it persistent, you'd have to mount a volume into the container at `/exa`, for example:
-
-```console
-$ docker run --name exasoldb  -p 127.0.0.1:8899:8888 --detach --privileged --stop-timeout 120 -v exa_volume:/exa exasol/docker-db:<version>
-```
-
-See [the Docker volumes documentation](https://docs.docker.com/engine/tutorials/dockervolumes/) for more examples on how to create and manage persistent volumes.
-
-**NOTE: Make sure the database has been shut down correctly before stopping the container!**
-
-A high stop-timeout (see example above) increases the chance that the DB can be shut down gracefully before the container is stopped, but it's not guaranteed. However, it can be stopped manually by executing the following command within the container (after attaching to it):
-
-```console
-$ dwad_client stop-wait DB1
-```
-
-Or from outside the container:
-
-```console
-$ docker exec -ti exasoldb dwad_client stop-wait DB1
-```
-
-## Updating the persistent volume of a stand-alone EXASOL container
-
-Starting with version 6.0.3-d1, an existing persistent volume can be updated (for use with a later version of an EXASOL image) by calling the following command with the *new* image:
-
-```console
-$ docker run --rm -v exa_volume:/exa exasol/docker-db:6.0.3-d1 update-sc
-```
-
-If everything works correctly, you should see output similar to this:
-
-```console
-Updating EXAConf '/exa/etc/EXAConf' from version '6.0.2' to '6.0.3'
-Container has been successfully updated!
-- Image ver. :  6.0.2-d1 --> 6.0.3-d1
-- DB ver.    :  6.0.2 --> 6.0.3
-- OS ver.    :  6.0.2 --> 6.0.3
-```
-
-After that, a new container can be created (from the new image) using the old / updated volume.
-
-
-# Creating a multi-host EXASOL cluster
-
-Starting with version 6.0.7-d1, it's possible to create multiple containers on different hosts and connect them to a cluster (one container per host). 
-
-## 1. Create the configuration 
-
-First you have to create the configuration for the cluster. There are two possible ways to do so:
- 
-### a. Create an /exa/ directory template (RECOMMENDED):
-
-Execute the following command (`--num-nodes` is the number of containers in the cluster):
-
-```console
-$ docker run -v $HOME/exa_template:/exa --rm -i exasol/docker-db:<version> init-sc --template --num-nodes 3
-```
-
-After the command has finished, the directory `$HOME/exa_template` contains all subdirectories as well as an EXAConf template (in `/etc`). The EXAConf is also printed to stdout.
-
-**NOTE: you man need to add `--privileged` if the host directory belongs to root.
- 
-### b. Create an EXAConf template
-
-You can create a template file and redirect it to wherever you want by executing: 
-
-```console
-$ docker run --rm -i exasol/docker-db:<version> init-sc --template --num-nodes 3 > ~/MyExaConf
-```
-
-**NOTE: we recommend to create an /exa/ template directory and the following steps assume that you did so. If you choose to only create the EXAConf file, you have to build a new Docker image with it and create the EXAStorage devices files within that image.**
-
-## 2. Complete the configuration
-
-The EXAConf template has to be completed before the cluster can be started. You have to provide:
-
-#### The private network of all nodes:
-```console
-[Node : 11]
-    PrivateNet = 10.10.10.11/24 # <-- replace with the real network
-```
-
-#### The EXAStorage devices on all nodes:
-```console
-[[Disk : default]]
-        Devices = dev.1    #'dev.1' must be located in '/exa/data/storage'
-```
-
-**NOTE: You can leave this entry as it is if you create the devices as described below.**
-
-#### The EXAVolume sizes:
-```console
-[EXAVolume : DataVolume1]
-    Type = data
-    Nodes = 11, 12, 13
-    Disk = default
-    # Volume size (e. g. '1 TiB')
-    Size =  # <-- enter volume size here
-```
-  
-#### The network port numbers (optional)
-
-If you are using the host network mode (see "Start the cluster" below), you may have to adjust the port numbers used by the EXASOL services. The one that's most likely to collide is the SSH daemon, which is using the well-known port 22. You can change it in EXAConf:
-```console
-[Global]
-    SSHPort = 22  # <-- replace with any unused port number
-```
-
-The other EXASOL services (e. g. Cored, BucketFS and the DB itself) are using port numbers above 1024. However, you can change them all by editing EXAConf.
- 
-#### The nameservers (optional):
-```console
-[Global]
-    ...
-    # Comma-separated list of nameservers for this cluster.
-    NameServers =
-```
- 
-## 3. Copy the configuration to all nodes
-
-Copy the `$HOME/exa_template/` directory to all cluster nodes (the exact path is not relevant, but should be identical on all nodes).
-
-## 4. Create the EXAStorage device files
-
-You can create the EXAStorage device files by executing (on each node):
-
-```console
-$ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1 bs=1M count=1 seek=999
-$ touch $HOME/exa_template/data/storage/dev.1
-```
-
-This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.
-
-**NOTE: Alternatively you can use an existing block-device by creating a special device file with the corresponding major and minor number (using `mknod`) named `dev.1` in the same directory.**
-
-**NOTE: The data file (or device) should be slightly bigger (~1%) than the required space for the volume, because a part of it will be reserved for metadata and checksums.**
- 
-## 5. Start the cluster
-
-The cluster is started by creating all containers individually and passing each of them its ID from the EXAConf. For `n11` the command would be:
-
-```console
-$ docker run --detach --network=host --privileged -v $HOME/exa_template:/exa exasol/docker-db:<version> init-sc --node-id 11
-```
-
-**NOTE: this example uses the host network stack, i. e. the containers are directly accessing a host interface to connect to each other. There is no need to expose ports in this mode: they are all accessible on the host.**
-
-# Enlarging an EXAStorage device
-
-If you need to enlarge the device file of an existing EXASOL container, you can use the following commands to do so:
-
-### 1. Open a terminal in the container:
-
-$ docker exec -ti <containername> /bin/bash
-
-### 2. Enlarge the device file physically (e. g. by 10GB):
-
-$ truncate --size=+10GB /exa/data/storage/dev.1.data
-
-**NOTE: the path may also be `/exa/data/storage/dev.1` (i. e. without the `data` suffix) in versions > 6.0.12**
-
-### 3. Enlarge the device logically (i. e. tell EXAStorage about the new size):
-
-$ cshdd --enlarge -n 11 -h /exa/data/storage/dev.1[.data]
-
-**NOTE: `-n` is the node ID**
-
-### 4. Repeat these steps for all devices and containers
 
 # Installing custom JDBC drivers
 
@@ -530,7 +630,7 @@ Please refer to the [offical manual](https://www.exasol.com/portal/display/DOC/D
 
 > ERROR::EXAConf: Integrity check failed! The stored checksum 'a2f605126a2ca6052b5477619975664f' does not match the actual checksum 'f9b9df0b9247b4696135c135ea066580'. Set checksum to 'COMMIT' if you made intentional changes.
 
-If you see a message similar to the one above, you probably modified an EXAConf that has already been used by an EXASOL container or `exadt`. It is issued by the EXAConf integrity check (introduced in version 6.0.7-d1) that protects EXAConf from accidental changes and detects file corruption.
+If you see a message similar to the one above, you probably modified an EXAConf that has already been used by an Exasol container or `exadt`. It is issued by the EXAConf integrity check (introduced in version 6.0.7-d1) that protects EXAConf from accidental changes and detects file corruption.
 
 In order to solve the problem you have to set the checksum within EXAConf to 'COMMIT'. It can be found in the 'Global' section, near the top of the file:
 
@@ -545,18 +645,18 @@ Checksum = COMMIT
 > WORKER::ERROR: Failed to open device '/exa/data/storage/dev.1.data'!
 > WORKER:: errno = Invalid argument
 
-If the container does not start up properly and you see an error like this in the logfiles below `/exa/logs/cored/`, your filesystem probably does not support `O_DIRECT ` I/O mode. This is the case with Docker for Mac.
+If the container does not start up properly and you see an error like this in the logfiles below `/exa/logs/cored/`, your filesystem probably does not support `O_DIRECT ` I/O mode. 
 
-We strongly recommend to use only Linux for the EXASOL Docker image. If you are already using Linux, but can't enable O_DIRECT for specific reasons, you can disable O_DIRECT mode by adding a line to each disk in EXAConf:
+We strongly recommend to always use O_DIRECT, but if you really can't, then you can disable O_DIRECT mode by adding a line to each disk in EXAConf:
 
 ```console
 [Node : 11]
     ...
-    [[Disk : default]]
+    [[Disk : disk1]]
         DirectIO = False
 ```
 
-**This feature is experimental and may cause significantly higher memory usage and fluctuating I/O throughput!**
+**IMPORTANT: Disabling O_DIRECT mode may cause significantly higher memory usage and fluctuating I/O throughput!**
 
 ### Error when starting the database
 
