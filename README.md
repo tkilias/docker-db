@@ -241,7 +241,7 @@ As stated above, the containers are deleted when a cluster is stopped, but the r
 A cluster can be updated by exchanging the EXASOL Docker image (but it has to be stopped first):
 
 ```console
-$ git pull <version>
+$ git pull
 $ docker pull exasol/docker-db:<version>
 $ pipenv install -r exadt_requirements.txt
 $ ./exadt update-cluster --image exasol/docker-db:<version> MyCluster
@@ -410,11 +410,8 @@ Copy the `$HOME/exa_template/` directory to all cluster nodes (the exact path is
 You can create the EXAStorage device files by executing (on each node):
 
 ```console
-$ truncate -s 1G $HOME/exa_template/data/storage/dev.1
-```
-or (alternatively):
-```console
 $ dd if=/dev/zero of=$HOME/exa_template/data/storage/dev.1 bs=1M count=1 seek=999
+$ touch $HOME/exa_template/data/storage/dev.1
 ```
 
 This will create a sparse file of 1GB (1000 blocks of 1 MB) that holds the data. Adjust the size of the data file to your needs. Repeat this step to create multiple file devices.

@@ -1,16 +1,14 @@
 #! /usr/bin/env python2.7
 
-import sys, argparse, time, getpass
+import sys, os, argparse, time
 try:
-    from libexadt.EXAConf import EXAConfError
-    from libexadt import util
-    assert EXAConfError, util #silence pyflakes
+    from libexadt.EXAConf import EXAConf, EXAConfError
+    assert EXAConf, EXAConfError #silence pyflakes
 except ImportError:
-    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.1.2/lib')
-    from libconfd.common import util
-    from libconfd.EXAConf import EXAConfError
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.0.15/lib')
+    from libconfd.EXAConf import EXAConf, EXAConfError
 
-my_version = "6.1.2"
+my_version = "6.0.15"
         
 #{{{ log_err
 def log_err(msg):
@@ -27,18 +25,33 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 # }}}
 
-#{{{ Print version
-def print_version(cmd):
-    print my_version
-#}}}
-
 # {{{ Read EXAConf
 def read_exaconf(filename, ro = False, initialized = False):
-    try: exaconf = util.read_exaconf(filename, ro, initialized)
-    except EXAConfError as e:
-        log_err("EXAConf error: %s" % str(e))
+    """
+    Checks and reads the given EXAConf file.
+    """
+
+    if not os.path.exists(filename):
+        log_err("EXAConf file '%s' does not exist!" % filename)
         sys.exit(1)
+    if ro and not os.access(filename, os.R_OK):
+        log_err("EXAConf file '%s' is not readable by the current user!" % filename)
+        sys.exit(1)
+    if not ro and not os.access(filename, os.W_OK):
+        log_err("EXAConf file '%s' is not writable by the current user!" % filename)
+        sys.exit(1)
+    try:
+        exaconf = EXAConf(os.path.dirname(filename), False, filename=os.path.basename(filename))
+    except EXAConfError as e:
+        print e
+        sys.exit(1)
+    # Check if it's initialized (if requested)
+    if initialized and not exaconf.initialized():
+        log_err("EXAConf in '%s' is not inizalized!" % filename)
+        sys.exit(1)
+
     return exaconf
+
 # }}}
 
 # {{{ Add node
@@ -50,30 +63,6 @@ def add_node(cmd):
     exaconf.add_node(nid = cmd.id, priv_net=cmd.priv_net, pub_net=cmd.pub_net)
 # }}}
  
-# {{{ Modify node
-def modify_node(cmd):
-    """
-    Modify an existing node.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    if not exaconf.node_exists(cmd.id):
-        print "Node '%s' does not exist in EXAConf '%s'!" % (cmd.id, cmd.exaconf)
-        return 1
-    nodes = exaconf.get_nodes()
-    node_conf = nodes[cmd.id]
-    # modify supported parameters
-    if cmd.priv_net:
-        node_conf.private_net = cmd.priv_net
-        if 'private_ip' in node_conf:
-            del node_conf.private_ip
-    if cmd.pub_net:
-        node_conf.public_net = cmd.pub_net
-        if 'public_ip' in node_conf:
-            del node_conf.public_ip
-
-    exaconf.set_node_conf(node_conf, cmd.id)
-# }}}
-
 # {{{ Remove node
 def remove_node(cmd):
     """
@@ -82,7 +71,7 @@ def remove_node(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_node(nid = cmd.id, force=cmd.force)
 # }}}
-
+ 
 #{{{ Add node disk
 def add_node_disk(cmd):
     """ 
@@ -130,39 +119,11 @@ def add_volume(cmd):
     """
     exaconf = read_exaconf(cmd.exaconf)
     vol_nodes = [ n.strip() for n in cmd.nodes.split(",") if n.strip() != "" ]
-    vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
-    if len(vol_owner) != 2:
-        print "Please specify user and group ID for owner (e.g. 1000:1000)"
-        return 1
+    vol_owner = tuple( o.strip() for o in cmd.owner.split(":") if o.strip() != "" ) if cmd.owner != None else None
     exaconf.add_volume(cmd.name, cmd.type, cmd.size, cmd.disk, cmd.redundancy, 
-                       vol_nodes, vol_owner, cmd.num_master_nodes, cmd.perm,
+                       vol_nodes, cmd.num_master_nodes, vol_owner, cmd.perm,
                        cmd.labels, cmd.block_size, cmd.stripe_size)
 # }}}
-   
-#{{{ Modify volume
-def modify_volume(cmd):
-    """
-    Modify an existing volume.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    volumes = exaconf.get_volumes()
-    if cmd.name not in volumes:
-        print "Volume '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
-        return 1
-    vol_conf = volumes[cmd.name]
-    # change supported options
-    if cmd.size:
-        vol_conf.size = cmd.size
-    if cmd.disk:
-        vol_conf.disk = cmd.disk
-    if cmd.nodes:
-        vol_conf.nodes = [ n.strip() for n in cmd.nodes.split(',') if n.strip() != '' ]
-        #adapt to new nr. of nodes, but may be overwritten below
-        vol_conf.num_master_nodes = len(vol_conf.nodes)
-    if cmd.num_master_nodes:
-        vol_conf.num_master_nodes = cmd.num_master_nodes
-    exaconf.set_volume_conf(vol_conf, cmd.name)
-#}}}
   
 # {{{ Add remote volume
 def add_remote_volume(cmd):
@@ -170,7 +131,7 @@ def add_remote_volume(cmd):
     Adds a remote volume to the given EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    exaconf.add_remote_volume(cmd.type, cmd.url, cmd.name, cmd.id, cmd.username, cmd.passwd, cmd.options)
+    exaconf.add_remote_volume(cmd.type, cmd.url, cmd.name, cmd.id, cmd.username, cmd.password, cmd.options)
 # }}}
  
 # {{{ Remove volume
@@ -206,143 +167,6 @@ def set_storage_conf(cmd):
         st_conf.space_warn_threshold = cmd.space_warn_threshold
     exaconf.set_storage_conf(st_conf)
 # }}}
-  
-#{{{ Encode shadow passwd
-def encode_shadow_passwd(cmd):
-    """
-    Encodes given password and into an /etc/shadow compatible SHA512 hash. Prompts for password if none is given.
-    """
-    passwd = cmd.passwd
-    if passwd is None:
-        passwd = getpass.getpass()
-    print util.encode_shadow_passwd(passwd)
-#}}}
-
-#{{{ List groups
-def list_groups(cmd):
-    """
-    Lists all groups in EXAConf.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    for g in exaconf.get_groups().items():
-        print "%s : %i" % (g[0], g[1].id)
-#}}}
-
-#{{{ Add group
-def add_group(cmd):
-    """
-    Add a group to EXAConf.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    exaconf.add_group(cmd.name, cmd.id)
-#}}}
- 
-#{{{ Remove group
-def remove_group(cmd):
-    """
-    Remove a group from EXAConf.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    exaconf.remove_group(cmd.name)
-#}}}
-  
-#{{{ List users
-def list_users(cmd):
-    """
-    Lists all users in EXAConf.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    for u in exaconf.get_users().items():
-        print "= %s (%i) =" % (u[0], u[1].id)
-        print "  group : %s" % u[1].group
-        print "  login : %s" % ("enabled" if u[1].login_enabled else "disabled")
-        if "passwd" in u[1]:
-            print "  passwd : %s" % u[1].passwd
-        if "additional_groups" in u[1]:
-            print "  groups : %s" % ", ".join(u[1].additional_groups)
-        if "authorized_keys" in u[1]:
-            print "  auth-keys : %s" % "\n              ".join(u[1].authorized_keys)
-#}}}
- 
-#{{{ Add user
-def add_user(cmd):
-    """
-    Add a user to EXAConf.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    passwd = cmd.passwd
-    encode_passwd = False if cmd.encode_passwd is None else True
-    add_groups = [ g.strip() for g in cmd.groups.split(",") if g.strip() != "" ] if cmd.groups else None
-    auth_keys = None
-    if cmd.auth_keys:
-        auth_keys = [ k.strip() for k in cmd.auth_keys.split(",") if k.strip() != "" ]
-    elif cmd.auth_keys_file:
-        with open(cmd.auth_keys_file) as f:
-            auth_keys = [ l.strip() for l in f ]
-    # prompt for password if not given and always encode it
-    if passwd is None and cmd.prompt_passwd:
-        passwd = getpass.getpass() 
-        encode_passwd = True
-    exaconf.add_user(name = cmd.name, uid = cmd.id,
-                     group = cmd.group, login_enabled = cmd.login_enabled,
-                     passwd = passwd,
-                     encode_passwd = encode_passwd,
-                     additional_groups = add_groups,
-                     authorized_keys = auth_keys)
-#}}}
-
-#{{{ Modify user
-def modify_user(cmd):
-    """
-    Modify an existing user. Everything except ID and password.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    users = exaconf.get_users()
-    if cmd.name not in users:
-        print "User '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
-        return 1
-    user_conf = users[cmd.name]
-    # change supported options
-    if cmd.group:
-        user_conf.group = cmd.group
-    if cmd.login_enabled:
-        user_conf.login_enabled = cmd.login_enabled
-    if cmd.groups:
-        user_conf.additional_groups = [ g.strip() for g in cmd.groups.split(",") if g.strip() != "" ]
-    if cmd.auth_keys:
-        user_conf.authorized_keys =  [ k.strip() for k in cmd.auth_keys.split(",") if k.strip() != "" ]
-    exaconf.set_user_conf(user_conf, cmd.name, extend_groups=cmd.extend_groups, extend_keys=cmd.extend_keys)
-#}}}
-
-#{{{ Passwd user
-def passwd_user(cmd):
-    """
-    Change user password.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    users = exaconf.get_users()
-    if not cmd.name in users:
-        print "User '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
-        return 1
-    user_conf = users[cmd.name]
-    
-    user_conf.passwd = cmd.passwd
-    encode_passwd = False if cmd.encode_passwd is None else True
-    # prompt for password if not given and always encode it
-    if user_conf.passwd is None:
-        user_conf.passwd = getpass.getpass() 
-        encode_passwd = True
-    exaconf.set_user_conf(user_conf, cmd.name, encode_passwd=encode_passwd)
-#}}}
- 
-#{{{ Remove user
-def remove_user(cmd):
-    """
-    Remove a user from EXAConf.
-    """
-    exaconf = read_exaconf(cmd.exaconf)
-    exaconf.remove_user(cmd.name)
-#}}}
  
 # {{{ Main
 def main():
@@ -354,22 +178,14 @@ def main():
             title = 'commands',
             description = 'supported commands')
                                     
-       
-    # version command
-    parser_ver = cmdparser.add_parser(
-            'version',
-            help='Print the exaconf CLI tool version number')
-    parser_ver.set_defaults(func=print_version)
-        
     # add node command
     parser_an = cmdparser.add_parser(
             'add-node',
-            help='Add a new node to EXAConf.')
+            help='Add a new node to the given EXAConf.')
     parser_an.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
     parser_an.add_argument(
             '--priv-net', '-n',
@@ -383,49 +199,23 @@ def main():
             help="Public network (e.g. '10.10.0.12/24'). Characters 'x' and 'X' in the IP are replaced with the node ID.")
     parser_an.add_argument(
             '--id', '-i',
-            type = str,
+            type = int,
             required = False,
             help='ID for the new node (automatically selected if omitted).')
     parser_an.set_defaults(func=add_node)
-         
-    # modify node command
-    parser_mn = cmdparser.add_parser(
-            'modify-node',
-            help='Modify an existing node in EXAConf.')
-    parser_mn.add_argument(
-            'exaconf', 
-            type=str, 
-            metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help='The EXAConf file.')
-    parser_mn.add_argument(
-            '--id', '-i',
-            type = str,
-            required = True,
-            help='ID of the node.')
-    parser_mn.add_argument(
-            '--priv-net', '-n',
-            type=str,
-            help="Private network (e.g. '10.10.10.12/24'). Characters 'x' and 'X' in the IP are replaced with the node ID.")
-    parser_mn.add_argument(
-            '--pub-net', '-N',
-            type=str,
-            help="Public network (e.g. '10.10.0.12/24'). Characters 'x' and 'X' in the IP are replaced with the node ID.")
-    parser_mn.set_defaults(func=modify_node)
                                      
     # remove node command
     parser_rn = cmdparser.add_parser(
             'remove-node',
-            help='Remove a node from EXAConf.')
+            help='Remove a node from the given EXAConf.')
     parser_rn.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
     parser_rn.add_argument(
             '--id', '-i',
-            type = str,
+            type = int,
             required = True,
             help='ID of the node that should be removed.')
     parser_rn.add_argument(
@@ -438,12 +228,11 @@ def main():
     # add node device command
     parser_and = cmdparser.add_parser(
             'add-node-device',
-            help='Add a device to an existing node in EXAConf.')
+            help='Add a device to an existing node in the given EXAConf.')
     parser_and.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
     parser_and.add_argument(
             '--node', '-n',
@@ -470,12 +259,11 @@ def main():
     # remove node device command
     parser_rnd = cmdparser.add_parser(
             'remove-node-device',
-            help='Remove a device from an existing node in EXAConf. The disk is also removed if it does not contain other devices.')
+            help='Remove a device from an existing node in the given EXAConf. The disk is also removed if it does not contain other devices.')
     parser_rnd.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
     parser_rnd.add_argument(
             '--node', '-n',
@@ -497,12 +285,11 @@ def main():
     # add node disk command
     parser_andi = cmdparser.add_parser(
             'add-node-disk',
-            help="Add an disk to an existing node in EXAConf. Use 'add-node-device' to add a disk with devices.")
+            help="Add an disk to an existing node in the given EXAConf. Use 'add-node-device' to add a disk with devices.")
     parser_andi.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
     parser_andi.add_argument(
             '--node', '-n',
@@ -539,12 +326,11 @@ def main():
     # remove node disk command
     parser_rndi = cmdparser.add_parser(
             'remove-node-disk',
-            help='Remove a disk (or all disks) from an existing node in EXAConf.')
+            help='Remove a disk (or all disks) from an existing node in the given EXAConf.')
     parser_rndi.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
     parser_rndi.add_argument(
             '--node', '-n',
@@ -561,12 +347,11 @@ def main():
     # add volume command
     parser_av = cmdparser.add_parser(
             'add-volume',
-            help='Add a new volume to EXAConf.')
+            help='Add a new volume to the given EXAConf.')
     parser_av.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
     parser_av.add_argument(
             '--name', '-n',
@@ -605,8 +390,7 @@ def main():
     parser_av.add_argument(
             '--owner', '-o',
             type=str,
-            required=True,
-            help="User and group ID, e. g. '1000:10001'.")
+            help="User and group ID, e. g. '1000:10001' (default: current user and group ID).")
     parser_av.add_argument(
             '--perm', '-p',
             type=str,
@@ -624,49 +408,15 @@ def main():
             type=int,
             help="Stripe-size in bytes (default: 262144).")
     parser_av.set_defaults(func=add_volume)
-                                         
-    # modify volume command
-    parser_mv = cmdparser.add_parser(
-            'modify-volume',
-            help='Modify an existing volume in EXAConf.')
-    parser_mv.add_argument(
-            'exaconf', 
-            type=str, 
-            metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help='The EXAConf file')
-    parser_mv.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help='Name of the volume.')
-    parser_mv.add_argument(
-            '--size', '-s',
-            type=str,
-            help="Size of the volume, e.g. 1TiB, 20GiB, 20000000B, etc..")
-    parser_mv.add_argument(
-            '--disk', '-d',
-            type=str,
-            help="Disk to be used for the volume.")
-    parser_mv.add_argument(
-            '--nodes', '-N',
-            type=str,
-            help="Comma-separated list of node IDs, e.g. '11,12,13'.")
-    parser_mv.add_argument(
-            '--num-master-nodes', '-m',
-            type=int,
-            help="Number of master nodes (default: same as nr. of nodes in '--nodes').")
-    parser_mv.set_defaults(func=modify_volume)
-                                           
+                                          
     # add remote volume command
     parser_arv = cmdparser.add_parser(
             'add-remote-volume',
-            help='Add a new volume to EXAConf.')
+            help='Add a new volume to the given EXAConf.')
     parser_arv.add_argument(
             'exaconf', 
             type=str, 
             metavar='EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
     parser_arv.add_argument(
             '--name', '-n',
@@ -692,7 +442,7 @@ def main():
             type=str,
             help="Username for accessing the remote volume' (default: None).")
     parser_arv.add_argument(
-            '--passwd', '-P',
+            '--password', '-P',
             type=str,
             help="Password for accessing the remote volume' (default: None).")
     parser_arv.add_argument(
@@ -704,12 +454,11 @@ def main():
     # remove volume command
     parser_rv = cmdparser.add_parser(
             'remove-volume',
-            help = 'Remove a volume from EXAConf.')
+            help = 'Remove a volume from the given EXAConf.')
     parser_rv.add_argument(
             'exaconf',
             type = str,
             metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help = 'The EXAConf file')
     parser_rv.add_argument(
             '--name', '-n',
@@ -726,12 +475,11 @@ def main():
     # remove remote volume command
     parser_rrv = cmdparser.add_parser(
             'remove-remote-volume',
-            help = 'Remove a remote volume from EXAConf.')
+            help = 'Remove a remote volume from the given EXAConf.')
     parser_rrv.add_argument(
             'exaconf',
             type = str,
             metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help = 'The EXAConf file')
     parser_rrv.add_argument(
             '--name', '-n',
@@ -753,7 +501,6 @@ def main():
             'exaconf',
             type = str,
             metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
             help = 'The EXAConf file')
     parser_ssc.add_argument(
             '--bg-rec-enabled', '-r',
@@ -768,238 +515,10 @@ def main():
             type = int,
             help="Space usage threshold (in percent, per node) for sending a warning")
     parser_ssc.set_defaults(func=set_storage_conf)
-   
-    # encode-shadow command
-    parser_enc = cmdparser.add_parser(
-            'encode-shadow',
-            help = 'Encode given password into an /etc/shadow compatible SHA512 hash. Prompt for the password if none is given.')
-    parser_enc.add_argument(
-            '--passwd', '-p',
-            type = str,
-            required = False,
-            help = "The password that should be encoded.")
-    parser_enc.set_defaults(func=encode_shadow_passwd)
-    
-    # list-groups command
-    parser_lsg = cmdparser.add_parser(
-            'list-groups',
-            help = 'Print all groups in EXAConf.')
-    parser_lsg.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_lsg.set_defaults(func=list_groups)
-     
-    # add-group command
-    parser_adg = cmdparser.add_parser(
-            'add-group',
-            help = 'Add a group to EXAConf.')
-    parser_adg.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_adg.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help = "The group name.")
-    parser_adg.add_argument(
-            '--id', '-i',
-            type = int,
-            required = True,
-            help = "The group ID.")
-    parser_adg.set_defaults(func=add_group)
-       
-    # remove-group command
-    parser_rmg = cmdparser.add_parser(
-            'remove-group',
-            help = 'Remove a group from EXAConf.')
-    parser_rmg.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_rmg.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help = "The group name.")
-    parser_rmg.set_defaults(func=remove_group)
  
-    # list-users command
-    parser_lsu = cmdparser.add_parser(
-            'list-users',
-            help = 'Print all users in EXAConf.')
-    parser_lsu.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_lsu.set_defaults(func=list_users)
-          
-    # add-user command
-    parser_adu = cmdparser.add_parser(
-            'add-user',
-            help = 'Add a user to EXAConf.')
-    parser_adu.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_adu.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help = "The user name.")
-    parser_adu.add_argument(
-            '--id', '-i',
-            type = int,
-            required = True,
-            help = "The user ID.")
-    parser_adu.add_argument(
-            '--group', '-g',
-            type = str,
-            required = True,
-            help = "The user's main group (name).")
-    parser_adu.add_argument(
-            '--login-enabled', '-l',
-            action='store_true',
-            required = False,
-            help = "Enable SSH login for this user (also gives him a valid shell).")
-    parser_adu.add_argument(
-            '--passwd', '-p',
-            type = str,
-            required = False,
-            help = "The user's password (encoded ot cleartext).")
-    parser_adu.add_argument(
-            '--prompt-passwd', '-P',
-            action='store_true',
-            required = False,
-            help = "Prompt for user password (will always be encoded).")
-    parser_adu.add_argument(
-            '--encode-passwd', '-e',
-            action='store_true',
-            required = False,
-            help = "Encode the given cleartext password as a SHA512 hash value (always True if prompted for password).")
-    parser_adu.add_argument(
-            '--groups', '-G',
-            type=str,
-            required = False,
-            help="Comma-separated list of additional groups (names).")
-    parser_adu.add_argument(
-            '--auth-keys', '-k',
-            type=str,
-            required = False,
-            help="Comma-separated list of public SSH keys.")
-    parser_adu.add_argument(
-            '--auth-keys-file', '-K',
-            type=str,
-            required = False,
-            help="File containing public SSH keys (one per line).")
-    parser_adu.set_defaults(func=add_user)
-    parser_adu.set_defaults(func=add_user)
-  
-    # modify-user command
-    parser_mdu = cmdparser.add_parser(
-            'modify-user',
-        help = 'Modify an existing user in EXAConf (everything except uid and password).')
-    parser_mdu.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_mdu.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help = "The user name.")
-    parser_mdu.add_argument(
-            '--group', '-g',
-            type = str,
-            help = "The user's main group (name).")
-    parser_mdu.add_argument(
-            '--login-enabled', '-l',
-            action='store_true',
-            required = False,
-            help = "Enable SSH login for this user (also gives him a valid shell).")
-    parser_mdu.add_argument(
-            '--groups', '-G',
-            type=str,
-            required = False,
-            help="Comma-separated list of additional groups (names).")
-    parser_mdu.add_argument(
-            '--auth-keys', '-K',
-            type=str,
-            required = False,
-            help="Comma-separated list of public SSH keys.")
-    parser_mdu.add_argument(
-            '--extend-groups', '-a',
-            action='store_true',
-            required = False,
-            help = "Extend the existing groups with the given ones.")
-    parser_mdu.add_argument(
-            '--extend-keys', '-A',
-            action='store_true',
-            required = False,
-            help = "Extend the existing keys with the given ones.")
-    parser_mdu.set_defaults(func=modify_user)
-   
-    # passwd-user command
-    parser_pwu = cmdparser.add_parser(
-            'passwd-user',
-        help = 'Set new password for given user.')
-    parser_pwu.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_pwu.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help = "The user name.")
-    parser_pwu.add_argument(
-            '--passwd', '-p',
-            type = str,
-            required = False,
-            help = "The user's password. Will prompt for password if omitted.")
-    parser_pwu.add_argument(
-            '--encode-passwd', '-e',
-            action='store_true',
-            required = False,
-            help = "Encode the given cleartext password as a SHA512 hash value (always True if prompted for password).")
-    parser_pwu.set_defaults(func=passwd_user)
- 
-    # remove-user command
-    parser_rmu = cmdparser.add_parser(
-            'remove-user',
-            help = 'Remove a user from EXAConf.')
-    parser_rmu.add_argument(
-            'exaconf',
-            type = str,
-            metavar = 'EXACONF',
-            default = '/exa/etc/EXAConf', nargs='?',
-            help = 'The EXAConf file')
-    parser_rmu.add_argument(
-            '--name', '-n',
-            type = str,
-            required = True,
-            help = "The user name.")
-    parser_rmu.set_defaults(func=remove_user)
-    
     command = parser.parse_args()
     command.func(command)
  # }}}
 
 if __name__ == '__main__':
     main()
-

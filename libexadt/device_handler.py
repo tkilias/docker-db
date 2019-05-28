@@ -2,7 +2,7 @@
 
 import os
 import EXAConf
-from util import bytes2units
+from utils import bytes2units
 from collections import OrderedDict as odict
 
 #{{{ Class DeviceError
@@ -26,11 +26,10 @@ class device_handler:
         self.max_auto_internal_used_space = (1024 * 1024 * 1024 * 6)
         # we reserve 2GiB per container, because docker may need this space 
         # if the containers are created on the same partition
-        # -> we also need some space for the integrated BucketFS files
-        self.auto_reserved_size  = self.exaconf.get_num_nodes() * (1024 * 1024 * 1024 * 3) 
+        self.auto_reserved_size  = self.exaconf.get_num_nodes() * (1024 * 1024 * 1024 * 2) 
         # a ltitle buffer for container-internal device creation (i. e. "self contained" images)
         self.auto_internal_reserved_size  = (1024 * 1024 * 1024 * 1) 
-        self.def_disk_name   = "disk1"
+        self.default_disk_name   = "default"
         self.auto_min_vol_size = (4 * 1024 * 1024 * 1024)
         self.vol_resize_step = (4 * 1024 * 1024 * 1024)
 #}}}
@@ -133,10 +132,9 @@ class device_handler:
         sufficient_free_space = True
         for mount_point in mount_devices.keys():
             part_free = self.get_free_space(mount_point)
-            files_virt_size = sum([os.path.getsize(os.path.realpath(dev)) for dev in mount_devices[mount_point]])
-            files_phys_size = sum([os.stat(os.path.realpath(dev)).st_blocks*512 for dev in mount_devices[mount_point]])
-            if part_free < (files_virt_size - files_phys_size):
-                print "Free space on '%s' is only %s, but accumulated size of (sparse) file-devices is %s!" % (mount_point, bytes2units(part_free), bytes2units(files_virt_size))
+            files_size = sum([os.path.getsize(os.path.realpath(dev)) for dev in mount_devices[mount_point]])
+            if part_free < files_size:
+                print "Free space on '%s' is only %s, but accumulated size of (sparse) file-devices is %s!" % (mount_point, bytes2units(part_free), bytes2units(files_size))
                 sufficient_free_space = False
         return sufficient_free_space
 #}}}
@@ -353,28 +351,26 @@ class device_handler:
 #}}}
 
 #{{{ Auto create file devices
-    def auto_create_file_devices(self, container_internal=False, max_space=None):
+    def auto_create_file_devices(self, container_internal=False):
         """
         Automatically determines the available free space in the root directory of the current
-        cluster and creates one file device per node for the default disk. 'container_internal'
+        cluster and creates one file device per node with disk name 'default'. 'container_internal'
         has to be True if this function is called from within a container (e. g. during the 
         initialization of a self-contained image).
 
         Throws an exception if the cluster already contains disks and devices.
         """
 
-        if max_space is None:
-            max_space = self.max_auto_internal_used_space if container_internal else self.max_auto_used_space
         # Get and check available free space in root directory
         root_usable = 0
         root_free = self.get_free_space(self.get_mount_point(self.exaconf.root))
         if container_internal == True:
-            root_usable = min(root_free - self.auto_internal_reserved_size, max_space)
+            root_usable = min(root_free - self.auto_internal_reserved_size, self.max_auto_internal_used_space)
         else:
             if root_free < self.min_auto_free_space:
                 raise DeviceError("Free space on '%s' is only '%s' but '%s' are required for automatic file-device creation!" % 
                                   (self.exaconf.root, bytes2units(root_free), bytes2units(self.min_auto_free_space)))
-            root_usable = min(root_free - self.auto_reserved_size, max_space)
+            root_usable = min(root_free - self.auto_reserved_size, self.max_auto_used_space)
 
         try:
             nodes_conf = self.exaconf.get_nodes()
@@ -390,15 +386,15 @@ class device_handler:
 
         # create the device-file in the local storage directory
         if container_internal == True:
-            self.create_node_file_devices("11", self.def_disk_name, 1, bytes_per_node, 
+            self.create_node_file_devices("11", "default", 1, bytes_per_node, 
                                           os.path.join(self.exaconf.container_root, self.exaconf.storage_dir),
                                           False)
         else:
-            self.create_file_devices(self.def_disk_name, 1, bytes_per_node, "", False)
+            self.create_file_devices("default", 1, bytes_per_node, "", False)
 
         try:
             # leave some room for the temporary volume!
-            self.exaconf.use_disk_for_volumes(self.def_disk_name, bytes_per_node * 0.666, 
+            self.exaconf.use_disk_for_volumes("default", bytes_per_node * 0.666, 
                                               min_vol_size = self.auto_min_vol_size,
                                               vol_resize_step = self.vol_resize_step)
         except EXAConf.EXAConfError as e:
