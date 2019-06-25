@@ -6,11 +6,11 @@ try:
     from libexadt import util
     assert EXAConfError, util #silence pyflakes
 except ImportError:
-    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.1.3/lib')
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.1.4/lib')
     from libconfd.common import util
     from libconfd.EXAConf import EXAConfError
 
-my_version = "6.1.3"
+my_version = "6.1.4"
         
 #{{{ log_err
 def log_err(msg):
@@ -151,6 +151,9 @@ def modify_volume(cmd):
         return 1
     vol_conf = volumes[cmd.name]
     # change supported options
+    if cmd.owner:
+        vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
+        vol_conf.owner = vol_owner
     if cmd.size:
         vol_conf.size = cmd.size
     if cmd.disk:
@@ -350,7 +353,9 @@ def add_bucketfs(cmd):
     Add a BucketFS to EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    exaconf.add_bucketfs(name = cmd.name, http_port = cmd.http_port, https_port = cmd.https_port,
+    bfs_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
+    exaconf.add_bucketfs(name = cmd.name, owner = bfs_owner,
+                         http_port = cmd.http_port, https_port = cmd.https_port,
                          sync_key = cmd.sync_key, 
                          sync_period = cmd.sync_period,
                          path = cmd.path)
@@ -362,12 +367,15 @@ def modify_bucketfs(cmd):
     Modify an existing BucketFS. Everything except sync_period and path.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    bucketfs_conf = exaconf.get_bucketfs_conf()
+    bucketfs_conf = exaconf.get_bucketfs()
     if cmd.name != "all" and cmd.name not in bucketfs_conf.fs:
         print "BucketFS '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
         return 1
     bfs_conf = bucketfs_conf.fs[cmd.name]
     # change supported options
+    if cmd.owner:
+        bfs_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
+        bfs_conf.owner = bfs_owner
     if cmd.http_port:
         bfs_conf.http_port = cmd.http_port
     if cmd.https_port:
@@ -411,7 +419,7 @@ def modify_bucket(cmd):
     additional_files = None
     if cmd.additional_files:
         additional_files = [ f.strip() for f in cmd.additional_files.split(",") if f.strip() != "" ]
-    bucketfs_conf = exaconf.get_bucketfs_conf()
+    bucketfs_conf = exaconf.get_bucketfs()
     if cmd.bfs_name not in bucketfs_conf.fs:
         print "BucketFS '%s' does not exist in EXAConf '%s'!" % (cmd.bfs_name, cmd.exaconf)
         return 1
@@ -789,6 +797,11 @@ def main():
             required = True,
             help='Name of the volume.')
     parser_mv.add_argument(
+            '--owner', '-o',
+            type = str,
+            required = False,
+        help="User and group ID of the volume (e. g. '1000:1001').")
+    parser_mv.add_argument(
             '--size', '-s',
             type=str,
             help="Size of the volume, e.g. 1TiB, 20GiB, 20000000B, etc..")
@@ -1159,6 +1172,11 @@ def main():
             required = True,
             help = "The BucketFS name.")
     parser_abfs.add_argument(
+            '--owner', '-o',
+            type = str,
+            required = True,
+            help = "User and group ID of the BucketFS (e. g. '1000 :1001').")
+    parser_abfs.add_argument(
             '--http-port', '-p',
             type = int,
             required = True,
@@ -1200,6 +1218,11 @@ def main():
             type = str,
             required = True,
             help = "The BucketFS name.")
+    parser_mbfs.add_argument(
+            '--owner', '-o',
+            type = str,
+            required = False,
+            help = "User and group ID of the BucketFS (e. g. '1000 :1001').")
     parser_mbfs.add_argument(
             '--http-port', '-p',
             type = int,

@@ -270,7 +270,7 @@ class docker_handler:
             if self.verbose:
                 print "Found the following docker config:"
                 pprint.pprint(docker_conf)
-            bucketfs_conf = self.exaconf.get_bucketfs_conf()
+            bucketfs_conf = self.exaconf.get_bucketfs()
             if self.verbose:
                 print "Found the following BucketFS config:"
                 pprint.pprint(bucketfs_conf)
@@ -334,8 +334,8 @@ class docker_handler:
                             devices.append(dev_host+":"+dev_container+":rwm")
                             devices.append(meta_host+":"+meta_container+":rwm")
             # d. BucketFS volumes
-            for bfs_name in bucketfs_conf.fs.keys():
-                bfs_conf = bucketfs_conf.fs[bfs_name]
+            for bfs_name in bucketfs_conf:
+                bfs_conf = bucketfs_conf[bfs_name]
                 if "path" in bfs_conf and bfs_conf.path != "":
                     bfs_host = os.path.join(bfs_conf.path, my_conf.name, bfs_name)
                     bfs_container = os.path.join(self.exaconf.container_root, self.exaconf.bucketfs_dir, bfs_name)

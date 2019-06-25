@@ -195,8 +195,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.1.3"
-        self.re_version = "6.1.3"
+        self.version = "6.1.4"
+        self.re_version = "6.1.4"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -361,6 +361,17 @@ class EXAConf:
                     self.config["Global"]["REVersion"] = self.re_version
                 if "Hugepages" not in self.config["Global"].scalars:
                     self.config["Global"]["Hugepages"] = self.def_hugepages
+            # 6.1.4 New BucketFS ownership mechanism
+            if self.compare_versions("6.1.4", conf_version) == 1:
+                if "BucketFS" in self.config.sections:
+                    bfs_owner = self.config["BucketFS"]["ServiceOwner"]
+                    # obsolete 'service_owner' becomes new owner of every BucketFS
+                    for section in self.config.sections:
+                        if self.is_bucketfs(section):
+                            bfs_sec = self.config[section]
+                            bfs_sec["Owner"] = bfs_owner
+                    # delete old global section
+                    del self.config["BucketFS"]
             # always increase version number
             self.config["Global"]["ConfVersion"] = self.version
             self.commit()
@@ -472,8 +483,8 @@ class EXAConf:
         curr_db_name = "EXASolution-" + self.db_version
         new_suite_name = "EXASuite-" + db_version.split(".")[0].strip()
         new_db_name = "EXASolution-" + db_version
-        bucketfs_conf = self.get_bucketfs_conf()
-        for bfs in bucketfs_conf.fs.iteritems():
+        bucketfs_conf = self.get_bucketfs()
+        for bfs in bucketfs_conf.iteritems():
             for bucket in bfs[1].buckets.iteritems():
                 bucket_sec = self.config['BucketFS : ' + bfs[0]]['Bucket : ' + bucket[0]]
                 if "AdditionalFiles" in bucket_sec.scalars:
@@ -501,8 +512,8 @@ class EXAConf:
         curr_os_name = "EXAClusterOS-" + self.os_version
         new_suite_name = "EXASuite-" + os_version.split(".")[0].strip()
         new_os_name = "EXAClusterOS-" + os_version
-        bucketfs_conf = self.get_bucketfs_conf()
-        for bfs in bucketfs_conf.fs.iteritems():
+        bucketfs_conf = self.get_bucketfs()
+        for bfs in bucketfs_conf.iteritems():
             for bucket in bfs[1].buckets.iteritems():
                 bucket_sec = self.config['BucketFS : ' + bfs[0]]['Bucket : ' + bucket[0]]
                 if "AdditionalFiles" in bucket_sec.scalars:
@@ -775,16 +786,10 @@ class EXAConf:
                           num_master_nodes = self.get_num_nodes(),
                           data_volume = "DataVolume1",
                           commit = False)
-        # BucketFS section
-        self.config["BucketFS"] = {}
-        glob_bfs_sec = self.config["BucketFS"]
-        glob_bfs_sec["ServiceOwner"] = str(def_owner[0]) + " : " + str(def_owner[1])
-        #comments
-        self.config.comments["BucketFS"] = ["\n","Global BucketFS options"]
-        glob_bfs_sec.comments["ServiceOwner"] = ["User and group ID of the BucketFS process."]
 
         # The default BucketFS
-        self.add_bucketfs(name = self.def_bucketfs, http_port = self.def_bucketfs_http_port,
+        self.add_bucketfs(name = self.def_bucketfs, owner = def_owner,
+                          http_port = self.def_bucketfs_http_port,
                           https_port = self.def_bucketfs_https_port, sync_key = None,
                           sync_period = None, commit = False)
 
@@ -798,7 +803,7 @@ class EXAConf:
         bucket_sec["AdditionalFiles"] = "EXAClusterOS:" + os.path.join(self.os_dir, "var/clients/packages/ScriptLanguages-*") + ", " + \
                                         "EXASolution-" + self.db_version + ":" + os.path.join(self.db_dir, "bin/udf/*")
         # comments
-        bfs_sec.comments["Bucket : default"] = ["\n", "The default bucket (auto-generated)"]
+        bfs_sec.comments["Bucket : default"] = ["The default bucket (auto-generated)"]
 
         self.commit()
         if not quiet:
@@ -1248,12 +1253,12 @@ class EXAConf:
         #comments
         self.config.comments[vol_sec_name] = ["\n", "An EXAStorage volume"]
         vol_sec.comments["Type"] = ["Type of volume: 'data' | 'archive'"]
-        vol_sec.comments["Nodes"] = ["Comma-separated list of node IDs to be used for this volume (incl. redundancy nodes)"]
+        vol_sec.comments["Owner"] = ["User and group IDs that own this volume (e. g. '1000:1005')"]
         vol_sec.comments["Disk"] = ["Name of the disk to be used for this volume.","This disk must exist on all volume nodes."]
         vol_sec.comments["Size"] = ["Volume size (e. g. '1 TiB')"]
         vol_sec.comments["Redundancy"] = ["Desired redundancy for this volume"]
-        vol_sec.comments["Owner"] = ["Volume owner (user and group ID)"]
-        vol_sec.comments["NumMasterNodes"] = ["OPTIONAL: Nr. of master nodes for this volume (default: use all nodes)"]
+        vol_sec.comments["Nodes"] = ["Comma-separated list of node IDs for this volume (put dedicated redundancy nodes at the end, if any)"]
+        vol_sec.comments["NumMasterNodes"] = ["OPTIONAL: Nr. of master nodes for this volume. Remaining nodes will be used for redundancy only."]
         vol_sec.comments["Priority"] = ["OPTIONAL: I/O priority (0 = highest, 20 = lowest)"]
         vol_sec.comments["Shared"] = ["OPTIONAL: shared volumes can be opened (for writing) by multiple clients simultaneously"]
         vol_sec.comments["Labels"] = ["OPTIONAL: a comma-separated list of labels for this volume"]
@@ -1481,8 +1486,8 @@ class EXAConf:
         db_sec["Version"] = version
         db_sec["MemSize"] = mem_size
         db_sec["Port"] = port
-        db_sec["Nodes"] = ','.join([str(x) for x in nodes])
         db_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
+        db_sec["Nodes"] = ','.join([str(x) for x in nodes])
         db_sec["NumMasterNodes"] = num_master_nodes
         db_sec["DataVolume"] = data_volume
         # optional values
@@ -1501,8 +1506,12 @@ class EXAConf:
         
         # comments
         self.config.comments[db_sec_name] = ["\n", "An EXASOL database"]
-        db_sec.comments["Version"] = ["The EXASOL version to be used for this database"]
-        db_sec.comments["MemSize"] = ["Memory size over all nodes (e. g. '1 TiB')"]
+        db_sec.comments["Version"] = ["Version nr. of this database."]
+        db_sec.comments["Owner"] = ["User and group IDs that own this database (e. g. '1000:1005')."]
+        db_sec.comments["MemSize"] = ["Memory size over all nodes (e. g. '1 TiB')."]
+        db_sec.comments["Nodes"] = ["Comma-separated list of node IDs for this DB (put reserve nodes at the end, if any)."]
+        db_sec.comments["NumMasterNodes"] = ["Nr. of initially active nodes for this DB. The remaining nodes will be reserve nodes."]
+        db_sec.comments["DataVolume"] = ["Name of the data volume to be used by this database."]
         db_sec.comments["Params"] = ["OPTIONAL: DB parameters"]
         # default JDBC sub-section
         db_sec["JDBC"] = {}
@@ -1618,7 +1627,8 @@ class EXAConf:
     # }}}
 
     # {{{ Add BucketFS
-    def add_bucketfs(self, name, http_port, https_port, 
+    def add_bucketfs(self, name, owner,
+                     http_port, https_port, 
                      sync_key = None, sync_period = None, 
                      path = None, commit = True):
         """
@@ -1626,8 +1636,15 @@ class EXAConf:
         """
         if self.bucketfs_exists(name):
             raise EXAConfError("BucketFS '%s' can't be added because that name is already in use!" % name)
+        # check if given owner exists
+        if not self.uid_exists(owner[0]):
+            raise EXAConfError("Can't add BucketFS '%s' because owner with UID %i doesn't exist!\n" % (name, owner[0])) 
+        if not self.gid_exists(owner[1]):
+            raise EXAConfError("Can't add BucketFS '%s' because owner group with GID %i doesn't exist!\n" % (name, owner[1])) 
+
         self.config["BucketFS : %s" % name] = {}
         bfs_sec = self.config["BucketFS : %s" % name]
+        bfs_sec["Owner"] = str(owner[0]) + ":" + str(owner[1]) 
         bfs_sec["HttpPort"] = http_port 
         bfs_sec["HttpsPort"] = https_port
         bfs_sec["SyncKey"] = sync_key if sync_key else gen_base64_passwd(32)
@@ -1636,7 +1653,7 @@ class EXAConf:
             bfs_sec["Path"] = path
 
         # comments
-        self.config.comments["BucketFS : %s" % self.def_bucketfs] = ["\n","A Bucket filesystem"]
+        self.config.comments["BucketFS : %s" % self.def_bucketfs] = ["\n","The default BucketFS (auto-generated)"]
         bfs_sec.comments["HttpPort"] = ["HTTP port number (0 = disabled)"]
         bfs_sec.comments["HttpsPort"] = ["HTTPS port number (0 = disabled)"]
         if path is not None:
@@ -1659,7 +1676,9 @@ class EXAConf:
         """
 
         if bfs_name != "all" and not self.bucketfs_exists(bfs_name):
-            self.add_bucketfs(name = bfs_name, http_port = bfs_conf.http_port,
+            self.add_bucketfs(name = bfs_name, 
+                              owner = bfs_conf.owner,
+                              http_port = bfs_conf.http_port,
                               https_port = bfs_conf.https_port,
                               sync_key = bfs_conf.sync_key if "sync_key" in bfs_conf else None,
                               sync_period = bfs_conf.sync_perion if "sync_period" in bfs_conf else None,
@@ -1667,8 +1686,8 @@ class EXAConf:
                               commit = commit)
             return
                 
-        bucketfs_conf = self.get_bucketfs_conf()                
-        for bfs in bucketfs_conf.fs.values():
+        bucketfs_conf = self.get_bucketfs()                
+        for bfs in bucketfs_conf.values():
             if bfs.name == bfs_name or bfs_name == "all":
                 bfs_sec = self.config["BucketFS : %s" % bfs_name]
                 bfs_sec.update(bfs_conf.to_section(ignore_keys = ['bfs_name']))
@@ -1737,8 +1756,8 @@ class EXAConf:
                             commit = commit)
             return
                 
-        bucketfs_conf = self.get_bucketfs_conf()                
-        for bfs in bucketfs_conf.fs.values():
+        bucketfs_conf = self.get_bucketfs()                
+        for bfs in bucketfs_conf.values():
             if bfs.name == bfs_name:
                 for b in bfs.buckets.values():
                     if b.name == b_name or b_name == "all":
@@ -1942,11 +1961,11 @@ class EXAConf:
         Also adds the default users and groups.
         """
         # find the first existing owner and use it as default UID / GID
-        # -> the BucketFS service owner should always be defined
         def_owner = None
-        bfs_conf = self.get_bucketfs_conf()
-        if "service_owner" in bfs_conf:
-            def_owner = bfs_conf.service_owner
+        for db in self.get_databases().values():
+            if "owner" in db:
+                def_owner = db.owner
+                break
         # add default users and groups
         self.add_default_groups(exadefgid = def_owner[1] if def_owner is not None else None)
         self.add_default_users(exadefuid = def_owner[0] if def_owner is not None else None)
@@ -2514,8 +2533,8 @@ class EXAConf:
         Checks if the given Bucket exists.
         """
         
-        bucketfs_conf = self.get_bucketfs_conf()
-        for bfs in bucketfs_conf.fs.values():
+        bucketfs_conf = self.get_bucketfs()
+        for bfs in bucketfs_conf.values():
             if bfs.name == bfs_name:
                 return name in bfs.buckets
         return False
@@ -2828,19 +2847,18 @@ class EXAConf:
         else:
             return result
     # }}}
-    # {{{ Get bucketfs conf
-    def get_bucketfs_conf(self):
+    # {{{ Get bucketfs
+    def get_bucketfs(self):
         """
-        Returns a config containing global options and config objects for all bucket filesystem and their buckets in 'fs'.
+        Returns a config containing entries for all bucket filesystems and their buckets.
         """
         bfs_config = config()
-        bfs_config.service_owner = tuple([ int(x.strip()) for x in self.config["BucketFS"]["ServiceOwner"].split(":") if x.strip() != "" ])
-        bfs_config.fs = config()
         for section in self.config.sections:
             if self.is_bucketfs(section):
                 bfs_sec = self.config[section]
                 bfs_conf = config()
                 bfs_conf.name = self.get_section_id(section)
+                bfs_conf.owner = tuple([ int(x.strip()) for x in bfs_sec["Owner"].split(":") if x.strip() != "" ])
                 bfs_conf.http_port = bfs_sec.as_int("HttpPort")
                 bfs_conf.https_port = bfs_sec.as_int("HttpsPort")
                 bfs_conf.sync_key = bfs_sec["SyncKey"]
@@ -2861,7 +2879,7 @@ class EXAConf:
                         if "AdditionalFiles" in b_sec.scalars:
                             b_conf.additional_files = [ f.strip() for f in b_sec["AdditionalFiles"].split(",") if f.strip() != "" ]
                         bfs_conf.buckets[b_conf.name] = b_conf
-                bfs_config.fs[bfs_conf.name] = bfs_conf
+                bfs_config[bfs_conf.name] = bfs_conf
         return bfs_config
     # }}}
     # {{{ Get ssl conf

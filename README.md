@@ -73,7 +73,7 @@ for F in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performa
 
 ## Hugepages
 
-We recommend to enable hugepages for hosts with at lease 64GB RAM. In order to do so, you have to set the `Hugepages` option in EXAConf to either `auto`, `host` or the nr. of hugepages per container. 
+We recommend to enable hugepages for hosts with at least 64GB RAM. In order to do so, you have to set the `Hugepages` option in EXAConf to either `auto`, `host` or the nr. of hugepages per container. 
 
 If you set it `auto`, the nr. of hugepages will be determined automatically, depending on the DB settings. 
 

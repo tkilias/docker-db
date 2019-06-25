@@ -4,9 +4,13 @@
                                  
 Bugs that are specifically related to the Docker version of the Exasol DB should be reported as a [Github Issue](https://github.com/EXASOL/docker-db/issues).
 
-If you are using `exadt`, then please add the archive created by `exadt collect-info <ClusterName>` to your bug report. 
+If you're able to execute commands in the Exasol container, then please use `exasupport` to generate an archive containing all logs and coredumps (if any).
 
-If you created a container with `docker run`, then the following information could be helpful:
+If the container startup fails, there are two ways to collect the logs:
+
+1.) If you are using `exadt`, collect logs with `exadt collect-info <ClusterName>` and add them to your bug report. 
+
+2.) If you created containers with `docker run`, please provide the following information:
 
 * your Docker version (the output of `docker version`)
 * the output of `docker logs` and `docker inspect` (of container and image)
