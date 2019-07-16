@@ -1,82 +1,18 @@
 #! /usr/bin/env python2.7
 
-import re, base64, string, random, os, subprocess, time, shutil, hashlib, uuid, crypt, tempfile
+import re, base64, string, random, os, subprocess, time, shutil, hashlib, uuid
 from py_compat import is_str
-from subprocess import Popen, PIPE
-try: monotonic = time.monotonic
-except: monotonic = time.time
-
-
 # pwd is only available on UNIX systems
 try:
     import pwd, grp
-    pwd, grp #silence pyflakes
 except ImportError:
     import getpass
     pwd = None
     grp = None
- 
-class atomic_file_writer(object): #{{{
-    def __init__(self, path, mode = 0644, uid = None, gid = None):
-        self._path = os.path.abspath(path)
-        self._is_duplicate = False
-        self._temp = tempfile.NamedTemporaryFile(mode = 'w',
-                                                 prefix = '.%s.' % os.path.basename(self._path),
-                                                 dir = os.path.dirname(self._path),
-                                                 delete = False)
-        os.fchmod(self._temp.fileno(), mode)
-        if uid is None: uid = os.getuid()
-        if gid is None: gid = os.getgid()
-        os.fchown(self._temp.fileno(), uid, gid)
 
-    def __getattr__(self, name):
-        return self._temp.__getattribute__(name)
+#{{{ Units to bytes
 
-    def close(self):
-        self._temp.close()
-        self._is_duplicate = False
-        if os.path.exists(self._path):
-            prev_cont = open(self._path).read()
-            new_cont = open(self._temp.name).read()
-            if prev_cont == new_cont:
-                self._is_duplicate = True
-        if not self._is_duplicate:
-            os.rename(self._temp.name, self._path)
-        else: os.unlink(self._temp.name)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def ignored(self):
-        return self._is_duplicate    
-# }}}
-
-def read_exaconf(filename, ro = False, initialized = False): #{{{
-    """
-    Checks and reads the given EXAConf file.
-    """
-    try:
-        from EXAConf import EXAConf, EXAConfError
-        EXAConf, EXAConfError #silence pyflakes
-    except ImportError:
-        from libconfd.EXAConf import EXAConf, EXAConfError
-
-    if not os.path.exists(filename):
-        raise EXAConfError("EXAConf file '%s' does not exist!" % filename)
-    if ro and not os.access(filename, os.R_OK):
-        raise EXAConfError("EXAConf file '%s' is not readable by the current user!" % filename)
-    if not ro and not os.access(filename, os.W_OK):
-        raise EXAConfError("EXAConf file '%s' is not writable by the current user!" % filename)
-    exaconf = EXAConf(os.path.dirname(filename), False, filename=os.path.basename(filename))
-    if initialized and not exaconf.initialized():
-        raise EXAConfError("EXAConf in '%s' is not inizalized!" % filename)
-    return exaconf
-#}}}
- 
-def units2bytes(data): #{{{
+def units2bytes(data):
     ma_units = units2bytes.re_parse.match(str(data))
     if not ma_units: raise RuntimeError('Could not parse %s as number with units.' % repr(data))
     num1, num2, unit, two = ma_units.groups()
@@ -91,9 +27,11 @@ units2bytes.re_parse = re.compile(r'^\s*([0-9]+)(?:[.]([0-9]+))?\s*(?:([KkMmGgTt
 units2bytes.convf = lambda x: {'k': x ** 1, 'm': x ** 2, 'g': x ** 3, 't': x ** 4, 'p': x ** 5, 'e': x ** 6, 'z': x ** 7, 'y': x ** 8, None: 1}
 units2bytes.convd = units2bytes.convf(1000)
 units2bytes.convb = units2bytes.convf(1024)
+
 #}}}
 
-def bytes2units(num): #{{{
+#{{{ Bytes to units
+def bytes2units(num):
     num = float(num)
     for x in ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'):
         if num < 1024.0:
@@ -102,7 +40,8 @@ def bytes2units(num): #{{{
     return "%s YiB" % ("%-3.8f" % num).rstrip('0').rstrip('.')
 #}}}
  
-def gen_passwd(length): #{{{
+#{{{ Gen passwd
+def gen_passwd(length):
     """
     Generates a new password with given length.
     """
@@ -110,14 +49,16 @@ def gen_passwd(length): #{{{
     return key
 #}}}
  
-def gen_base64_passwd(length):#{{{
+#{{{ Gen base64 passwd
+def gen_base64_passwd(length):
     """
     Generates a base64 encoded password with given length.
     """
     return base64.b64encode(gen_passwd(length))
 #}}}
 
-def get_euid(): #{{{
+#{{{ Get effective UID
+def get_euid():
     """
     Returns the effective user ID on UNIX systems and a default value on Windows.
     """
@@ -127,7 +68,8 @@ def get_euid(): #{{{
         return 500
 #}}}
  
-def get_egid(): #{{{
+#{{{ Get effective GID
+def get_egid():
     """
     Returns the effective group ID on UNIX systems and a default value on Windows.
     """
@@ -137,7 +79,8 @@ def get_egid(): #{{{
         return 500
 #}}}
 
-def get_username(): #{{{
+#{{{ Get username
+def get_username():
     """
     Returns the (effective) username on UNIX and Windows.
     """
@@ -148,7 +91,8 @@ def get_username(): #{{{
 
 #}}}
 
-def to_uid(uname): #{{{
+#{{{ To uid
+def to_uid(uname):
     """
     Returns the user ID of the given username. If it's already an ID, it either returns it directly 
     or converts it to an int if it's a string.
@@ -169,7 +113,8 @@ def to_uid(uname): #{{{
     return uid
 #}}}
  
-def to_uname(uid): #{{{
+#{{{ To uname
+def to_uname(uid):
     """
     Returns the username of the given user ID. ID can be an int or a string. If ID is already a username, returns it unmodified.
     """
@@ -190,7 +135,8 @@ def to_uname(uid): #{{{
     return uname
 #}}}
  
-def to_gid(gname): #{{{
+#{{{ To gid
+def to_gid(gname):
     """
     Returns the group ID of the given groupname. If it's already an ID, it either returns it directly 
     or converts it to an int if it's a string.
@@ -211,7 +157,8 @@ def to_gid(gname): #{{{
     return gid
 #}}}
   
-def to_gname(gid): #{{{
+#{{{ To gname
+def to_gname(gid):
     """
     Returns the groupname of the given group ID. ID can be an int or a string. If ID is already a groupname, returns it unmodified.
     """
@@ -232,32 +179,35 @@ def to_gname(gid): #{{{
     return gname
 #}}}
  
-def get_user_gnames(user): #{{{
+#{{{ Get user gnames
+def get_user_gnames(user):
     """
-    Returns a list of all local group names that the given user belongs to (primary group is first element).
+    Returns a list of all local group names that the given user belongs to.
     'user' may be a name or an ID.
     """
     uname = to_uname(user)
     gnames = [ g.gr_name for g in grp.getgrall() if uname in g.gr_mem ]
-    #insert primary group (in front)
+    #add primary group
     gid = pwd.getpwnam(uname).pw_gid  
-    gnames.insert(0, grp.getgrgid(gid).gr_name)
+    gnames.append(grp.getgrgid(gid).gr_name)
     return gnames
 #}}}
   
-def get_user_gids(user): #{{{
+#{{{ Get user gids
+def get_user_gids(user):
     """
-    Returns a list of all local group IDs that the given user belongs to (primary group is first element).
+    Returns a list of all local group IDs that the given user belongs to.
     'user' may be a name or an ID.
     """
     uname = to_uname(user)
     gids = [ g.gr_gid for g in grp.getgrall() if uname in g.gr_mem ]
-    #insert primary group (in front)
-    gids.insert(0, pwd.getpwnam(uname).pw_gid)
+    #add primary group
+    gids.append(pwd.getpwnam(uname).pw_gid)
     return gids
 #}}}
  
-def get_first_interface(timeout=1): #{{{
+#{{{ Get first interface
+def get_first_interface(timeout=1):
     """
     Returns the name and network address of the first interface that is in state UP. 
     Retries until an interface is found or the given time (in seconds) has elapsed.
@@ -283,14 +233,15 @@ def get_first_interface(timeout=1): #{{{
         time_elapsed += 1
 #}}}
 
-def get_all_interfaces(timeout=1, up_only=True): #{{{
+#{{{ Get all interfaces
+def get_all_interfaces(timeout=1, up_only=True):
     """
     Returns a list of tuples of all interfaces in state UP (if 'up_only' is True).
     Retries until at least one interface is found or the given time (in seconds) has elapsed.
     """
 
     interfaces = []
-    valid_if = False
+    found_if = False
     time_elapsed = 0
     while len(interfaces) == 0 and time_elapsed < timeout:
         iface = 'N/A'
@@ -299,27 +250,28 @@ def get_all_interfaces(timeout=1, up_only=True): #{{{
         output = subprocess.check_output(['/usr/bin/env', 'ip', 'addr'])
         for line in output.splitlines():
             line = line.strip()
-            # found a new interface 
-            # -> reset local values until iface has been checked
-            if 'state' in line:
-                valid_if = False
-                state = 'N/A'
-                iface = 'N/A'
-            # check state and remember iface name
+            # found an interface 
+            # -> remember state and address
             if 'state UP' in line:
-                valid_if = True
+                found_if = True
                 state = 'UP'
                 iface = line.split(':')[1].strip()
             elif up_only is False and 'state DOWN' in line:
-                valid_if = True
+                found_if = True
                 state = 'DOWN'
                 iface = line.split(':')[1].strip()
             # extract and remember inet address 
-            # --> each interface can have multiple addresses
-            if 'inet' in line and valid_if is True:
+            # --> usually 3 lines down
+            if 'inet' in line and found_if is True:
                 address = line.split(' ')[1].strip()   
+                # append the new interface
                 interfaces.append((iface, address, state))
+                # reset local values
+                # -> the next line with 'state UP' or 'state DOWN' has to be checked again
+                found_if = False
+                iface = 'N/A'
                 address = 'N/A'
+                state = 'N/A'
         # no interface found yet
         if len(interfaces) == 0:
             time.sleep(1)
@@ -328,7 +280,8 @@ def get_all_interfaces(timeout=1, up_only=True): #{{{
     return interfaces
 #}}}
  
-def rotate_file(current, max_copies): #{{{
+#{{{ Rotate file
+def rotate_file(current, max_copies):
     previous = current + r'.%d'
     for fnum in range(max_copies - 1, -1, -1):
         if os.path.exists(previous % fnum):
@@ -342,7 +295,8 @@ def rotate_file(current, max_copies): #{{{
         shutil.copy(current, previous % 0)
 #}}}
 
-def md5(filename): #{{{
+#{{{ MD5
+def md5(filename):
     """
     Returns the MD5 sum of the given file.
     """
@@ -354,82 +308,10 @@ def md5(filename): #{{{
     return md5sum.hexdigest()
 #}}}
 
-def gen_node_uuid(): #{{{
+#{{{ Generate node uuid    
+def gen_node_uuid():
     """
     Generates a UUID for EXASOL cluster nodes (40 chars long). 
     """
     return (uuid.uuid4().hex + uuid.uuid4().hex)[:40].upper()
 #}}}
-
-def encode_shadow_passwd(passwd): #{{{
-    """
-    Encodes the given passwd into an /etc/shadow compatible SHA512 hash.
-    """
-    return crypt.crypt(passwd, "$6$"+base64.b64encode(os.urandom(16))+"$")
-#}}}
-
-# {{{ utility to convert a string to seconds, currently support till weeks
-# it's easy to scale on demand; basically it gets numbers from different scale strings like 'w',
-# 'd', etc and the multiplies as 2 one-dimension matrixs (vectors)
-# using constaints here to make it quicker
-TimeScaleSeconds = [7 * 24 * 60 * 60, 24 * 60 * 60, 60 * 60, 60, 1]
-
-TimeScaleChars = ['w', 'd', 'h', 'm', 's']
-
-class TimeScale: #{{{
-    WEEK = 0
-    DAY = 1
-    HOUR = 2
-    MINUTE = 3
-    SECOND = 4
-    NUM = 5
-# }}}
-
-def string_to_seconds (data): #{{{
-    """
-    @data, Date time format is: <num>w <num>d <num>h <num>m <num>s
-        or <num> only in seconds
-    @return, seconds for the input string or -1 if the string is invalid
-    """
-    intervals = [0] * TimeScale.NUM
-    for s in xrange (TimeScale.NUM):
-        regex_str = r'^(([0-9]+)%s\s*)' % TimeScaleChars[s]
-        ma_scale = re.match(regex_str, data)
-        if ma_scale:
-            intervals[s] = int (ma_scale.group (2))
-            data = data[len (ma_scale.group(1)):]
-    if len (data) > 0:
-        try:
-            intervals[TimeScale.SECOND] = int (data)
-            data = ''
-        except:
-            pass
-    seconds = 0
-    for idx, val in enumerate (TimeScaleSeconds):
-        seconds = seconds + val * intervals[idx]
-    return seconds if len (data) == 0 else -1
-# }}}
-
-def timed_run (cmd, timeout = 60): #{{{
-    """
-    @arguments:
-        @cmd, a list which includes commands and their arguments
-        @timeout, timeout value for commands to be run
-    @return, (return_code, streamed_data)
-        @return_code, if it's a standard command, 0 means success; otherwise, self explained
-        @streamed_data, streamed output for both stdout and stderr, a list
-    """
-    p = Popen (cmd, stdout = PIPE, stderr = PIPE)
-    start_time = monotonic ()
-    while (monotonic () - start_time) < timeout:
-        if p.poll() is not None:
-            x = p.communicate ()
-            return (p.returncode, x)
-    try:
-        p.kill ()
-    except:
-        pass
-    return (-1, None)
-# }}}
-#}}}
-

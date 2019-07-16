@@ -1,11 +1,11 @@
 #! /bin/bash
 
 source "$(dirname $0)/functions.sh"
+
 EXADT_DIR="$(readlink -f "$(dirname "$0")/../")"
 LICENSE="$(readlink -f "$(dirname "$0")/../license/license.xml")"
 ROOT="$HOME"
-IMAGE="exasol/docker-db:latest"
-DO_PULL="true"
+IMAGE="exasol/docker-db-dev:latest"
 DOCKER="$(which docker)"
 PIPENV="$(which pipenv)"
 TMP_DIR=$(mktemp -d)
@@ -14,10 +14,6 @@ NUM_NODES=1
 
 if [[ -z $PIPENV ]]; then
     die "'pipenv' is not installed or not in \$PATH!"
-fi
-
-if [[ -z "${INSTALL_LOG}" ]]; then
-    INSTALL_LOG="1"
 fi
 
 cleanup() {
@@ -43,11 +39,10 @@ usage() {
     echo "-r    : Root directory for cluster creation (default: '$ROOT')."
     echo "-b    : The folder that contains the exadt binary (default: '$EXADT_DIR')."
     echo "-l    : The license (default: '$LICENSE')."
-    echo "-P    : Don't try to pull Docker image (default: '$DO_PULL')."
 }
 
 # parse parameters
-while getopts "i:n:D:r:b:l:Ph" opt; do
+while getopts "i:n:D:r:b:l:h" opt; do
     case "$opt" in
         i)
             IMAGE="$OPTARG"
@@ -73,10 +68,6 @@ while getopts "i:n:D:r:b:l:Ph" opt; do
             LICENSE="$(readlink -f "$OPTARG")"
             log "INFO:: Using license '$LICENSE'."
             ;;
-        P)
-            DO_PULL="false"
-            log "INFO:: Not pulling the Docker image."
-            ;;
         h)
             usage
             exit 0
@@ -90,12 +81,10 @@ done
 
 
 log "=== Starting exadt basic test ==="
-if [[ "$DO_PULL" == "true" ]]; then
-    $DOCKER pull "$IMAGE" #does not work with locally built dev-images
-fi
+$DOCKER pull "$IMAGE" #does not work with locally built dev-images
 set -e
 cd "$EXADT_DIR" # necessary for pipenv
-"$PIPENV" install -r exadt_requirements.txt 2>> "$INSTALL_LOG"
+"$PIPENV" install -r ./exadt_requirements.txt
 "$PIPENV" run ./exadt list-clusters
 "$PIPENV" run ./exadt create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster
 "$PIPENV" run ./exadt list-clusters

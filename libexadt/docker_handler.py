@@ -1,7 +1,7 @@
 import os,docker,pprint,shutil,device_handler
 from docker.utils import kwargs_from_env
 import EXAConf
-from util import rotate_file
+from utils import rotate_file
 from EXAConf import config
 
 ip_types = { 4: 'ipv4_address', 6: 'ipv6_address' }
@@ -47,10 +47,7 @@ class docker_handler:
         self.exaconf = exaconf
         self.cluster_name = self.exaconf.get_cluster_name()
         self.image = self.exaconf.get_docker_image()
-        # build single command string (so it can be easily replaced by
-        # custom command below)
-        init_cmd = exaconf.get_init_cmd()
-        self.def_container_cmd = ' '.join([init_cmd[0]] + init_cmd[1])
+        self.def_container_cmd = os.path.join(self.exaconf.os_dir, "libexec/exainit.py")
 #}}}
 
 #{{{ Docker version (debug)
@@ -270,7 +267,7 @@ class docker_handler:
             if self.verbose:
                 print "Found the following docker config:"
                 pprint.pprint(docker_conf)
-            bucketfs_conf = self.exaconf.get_bucketfs()
+            bucketfs_conf = self.exaconf.get_bucketfs_conf()
             if self.verbose:
                 print "Found the following BucketFS config:"
                 pprint.pprint(bucketfs_conf)
@@ -334,8 +331,8 @@ class docker_handler:
                             devices.append(dev_host+":"+dev_container+":rwm")
                             devices.append(meta_host+":"+meta_container+":rwm")
             # d. BucketFS volumes
-            for bfs_name in bucketfs_conf:
-                bfs_conf = bucketfs_conf[bfs_name]
+            for bfs_name in bucketfs_conf.fs.keys():
+                bfs_conf = bucketfs_conf.fs[bfs_name]
                 if "path" in bfs_conf and bfs_conf.path != "":
                     bfs_host = os.path.join(bfs_conf.path, my_conf.name, bfs_name)
                     bfs_container = os.path.join(self.exaconf.container_root, self.exaconf.bucketfs_dir, bfs_name)
@@ -358,7 +355,6 @@ class docker_handler:
                                                 cap_add = docker_conf.cap_add,
                                                 cap_drop = docker_conf.cap_drop,
                                                 network_mode = docker_conf.network_mode,
-                                                ipc_mode=docker_conf.ipc_mode,
                                                 auto_remove = auto_remove,
                                                 binds = binds,
                                                 devices = devices,
@@ -595,7 +591,7 @@ class docker_handler:
                 raise DockerError("EXAConf image version does not match that of the docker image ('%s' vs. '%s')! Please update the cluster before attempting to start it." % (conf_img_version, ic.labels.version))
 
             # 1. check free space in case of file-devices
-            if self.exaconf.get_device_type() == "file":
+            if self.exaconf.get_docker_device_type() == "file":
                 dh = device_handler.device_handler(self.exaconf)
                 if dh.check_free_space() == False:
                     raise DockerError("Check for space usage failed! Aborting startup.")
@@ -610,7 +606,7 @@ class docker_handler:
                 self.log("Copying EXAConf and license to all node volumes.")
                 for n,volume in node_volumes.iteritems():
                     shutil.copy(conf_path, os.path.join(volume, self.exaconf.etc_dir))
-                    shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir, self.exaconf.license_filename))
+                    shutil.copy(license, os.path.join(volume, self.exaconf.etc_dir))
                 # copy SSL files (if they exist)
                 try:
                     ssl_conf = self.exaconf.get_ssl_conf()
