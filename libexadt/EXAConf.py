@@ -1,10 +1,17 @@
 # -*- mode: python -*-
 
 import sys, os, stat, ipaddr, configobj, StringIO, hashlib, re
-from utils import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, to_uid, to_uname
 from collections import OrderedDict as odict
+try:
+    from util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd
+    units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd #silence pyflakes
+    from py_compat import is_str
+    is_str
+except ImportError:
+    from libconfd.common.util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd
+    from libconfd.common.py_compat import is_str
 
-#{{{ Class EXAConfError
+# {{{ Class EXAConfError
 class EXAConfError(Exception):
     """
     The EXAConf exception class.
@@ -15,9 +22,8 @@ class EXAConfError(Exception):
         return self.msg
     def __repr__(self):
         return "%s: %s" % (self.__class__.__name__, self.msg)
-#}}}
-
-#{{{ Class EXAConfIntegrityError
+# }}}
+# {{{ Class EXAConfIntegrityError
 class EXAConfIntegrityError(EXAConfError):
     """
     Special exception raised if the integrity check fails.
@@ -26,9 +32,8 @@ class EXAConfIntegrityError(EXAConfError):
         self.msg = "ERROR::EXAConf: " + msg
     def __str__(self):
         return repr(self.msg)
-#}}}
-
-#{{{ Class config
+# }}}
+# {{{ Class config
 class config(odict):
     __enabled = False
     def __init__(self, *args, **kw):
@@ -44,7 +49,49 @@ class config(odict):
         if not self.__enabled:
             self.__dict__[name] = value
         else: self.__setitem__(name, value)    
-#}}}                   
+    def __delattr__(self, name):
+        if not self.__enabled:
+            del self.__dict__[name]
+        else: self.__delitem__(name)
+    
+    def to_section(self, ignore_keys = []):
+        """
+        Returns a dictionary with all members converted so it can be assigned
+        to a ConfigObj section.
+        """
+        special_keys = {'id': 'ID',
+                        'uuid': 'UUID',
+                        'jdbc': 'JDBC',
+                        'direct_io': 'DirectIO',
+                        'ssh_port': 'SSHPort',
+                        'bucketfs': 'BucketFS'}
+        def to_camelcase(key):
+            """
+            Converts the given key to camelcase (or a special, pre-defined, case).
+            """
+            if key in special_keys:
+                return special_keys[key]
+            return ''.join(x.capitalize() or '_' for x in key.split('_'))
+        def to_str(value):
+            """
+            Converts the given value to a string suitable for ConfigObj.
+            """
+            if isinstance(value, list):
+                return ", ".join([ to_str(e) for e in value ])
+            elif isinstance(value, tuple):
+                return " : ".join([ to_str(e) for e in value ])
+            else:
+                return str(value)
+
+        section = { to_camelcase(k):v for (k,v) in self.items() if k not in ignore_keys }
+        for k,v in section.items():
+            if isinstance(v, type(self)):
+                section[k] = v.to_section()
+            else:
+                section[k] = to_str(v)
+        return section
+
+# }}}                   
 
 class EXAConf:
     """ 
@@ -53,9 +100,10 @@ class EXAConf:
     This class depends on the 'configobj' module (https://configobj.readthedocs.io, https://github.com/DiffSK/configobj)
     """
    
-#{{{ static / default values
+    # {{{ static / default values
     max_reserved_node_id = 10 # IDs 0-10 are reserved
     container_root = "/exa"
+    license_filename = "license.xml"
     node_root_prefix = "n"
     dev_prefix = "dev."
     data_dev_suffix  = ".data"
@@ -65,8 +113,10 @@ class EXAConf:
     bucketfs_dir = "data/bucketfs"
     etc_dir = "etc"
     tmp_dir = "tmp"
+    support_dir = "tmp/support"
     spool_dir = "spool"
     sync_dir = "spool/sync"
+    coredump_dir = "spool/coredumps"
     job_dir = "spool/jobs"
     job_queue_dir = "spool/jobs/queue"
     job_run_dir = "spool/jobs/run"
@@ -84,11 +134,12 @@ class EXAConf:
     cored_log_dir = "logs/cored"
     db_log_dir = "logs/db"
     docker_log_dir = "logs/docker"
+    syslog_dir = "logs/syslog"
     device_pool_dir = "sys/devices"
     node_uuid = "etc/node_uuid"
     valid_platforms = ['docker', 'vm', 'aws', 'azure']
     valid_vol_types = ['data', 'archive', 'remote']
-    valid_remote_vol_types = ['smb', 'ftp', 's3']
+    valid_remote_vol_types = ['smb', 'ftp', 's3', 'file']
     remote_vol_id_offset = 10000
     docker_logs_filename = "docker_logs"
     docker_max_logs_copies = 9
@@ -96,13 +147,16 @@ class EXAConf:
     def_ssh_port = 22
     def_bucketfs = "bfsdefault"
     def_bucket = "default"
+    def_bucketfs_sync_period = 30000
     def_db_port = 8888
     def_bucketfs_http_port = 6583
     def_bucketfs_https_port = 0
-    def_xmlrpc_port = 80
+    def_xmlrpc_port = 443
     def_docker_privileged = True
     def_docker_network_mode = "bridge"
-    def_docker_volumes = ['/dev:/dev:rw','/run/udev:/run/udev:rw','/run/lm:/run/lvm:rw','/lib/modules:/lib/modules:ro']
+    def_docker_ipc_mode = "private"
+    lvm_volumes = ['/run/udev:/run/udev:rw','/run/lvm:/run/lvm:rw','/lib/modules:/lib/modules:ro']
+    def_docker_volumes = lvm_volumes
     def_jdbc_driver_dir = "drivers/jdbc"
     def_oracle_driver_dir = "drivers/oracle"
     def_vol_block_size = 4096 # block-size in bytes
@@ -110,6 +164,7 @@ class EXAConf:
     def_vol_perm = "rwx"
     def_vol_prio = 10
     def_vol_shared = False
+    def_arch_vol_shared = True
     def_arch_vol_block_size = 65536
     def_arch_vol_stripe_size = 65536
     def_space_warn_threshold = 90 #percent
@@ -117,10 +172,15 @@ class EXAConf:
     def_bg_rec_limit_10gb = 300 #recovery limit (10GBit)
     def_disk_component = 'exastorage'
     def_gui_subdir = "share/exagui/"
-#}}}
-
-#{{{ Init
-    def __init__(self, root, initialized, filename="EXAConf"):
+    def_device_type = "block"
+    def_timezone = "Europe/Berlin"
+    def_hugepages = 0
+    def_groups_start_id = 1000
+    reserved_users = {'exameta': 55555, '_owner': None, '_self': None}
+    reserved_groups = {'exameta': 55555, 'exahugepages': 55554}
+    # }}}
+    # {{{ Init
+    def __init__(self, root = None, initialized = None, filename="EXAConf"):
         """ 
         Creates a new EXAConf instance from the file 'EXAConf' within the given 
         root directory. If 'initialized' is true, an exception is thrown if
@@ -135,9 +195,11 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.0.16"
+        self.version = "6.1.4"
+        self.re_version = "6.1.4"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
+        self.set_re_version(self.re_version)
         self.img_version = self.version
   
         # set root to container_root if omitted
@@ -166,16 +228,18 @@ class EXAConf:
         # also read current version numbers from config
         if self.initialized():
             self.check_integrity()
-            self.update_self()
             self.validate()
-            self.set_os_version(self.config["Global"]["OSVersion"])
-            self.set_db_version(self.config["Global"]["DBVersion"])
+            if "OSVersion" in self.config["Global"].scalars:
+                self.set_os_version(self.config["Global"]["OSVersion"])
+            if "DBVersion" in self.config["Global"].scalars:
+                self.set_db_version(self.config["Global"]["DBVersion"])
+            if "REVersion" in self.config["Global"].scalars:
+                self.set_re_version(self.config["Global"]["REVersion"])
             # has been introduced later, i. e. may be absent
             if "ImageVersion" in self.config["Global"].scalars:
                 self.img_version = self.config["Global"]["ImageVersion"]
-#}}}
-
-#{{{ Compare versions
+    # }}}
+    # {{{ Compare versions
     def compare_versions(self, first, second):
         """
         Compares the given version numbers (in format "X.X.X" or "X.X.X-dY") and returns
@@ -189,15 +253,21 @@ class EXAConf:
         first = first.split("-")[0]
         second = second.split("-")[0]
         # now compare the digits, starting from left (i. e. major version)
-        for (f,s) in zip(first.split("."), second.split(".")):
-            if int(f) < int(s):
-                return -1
-            elif int(f) > int(s):
-                return 1
-        return 0
-#}}}
- 
-#{{{ Check integrity
+        try:
+            for (f,s) in zip(first.split("."), second.split(".")):
+                if int(f) < int(s):
+                    return -1
+                elif int(f) > int(s):
+                    return 1
+            return 0
+        # check for invalid version numbers and skip always return 0 in that case
+        # -> this avoids unexpected exceptions with development versions BUT
+        #    also DISABLES THE EXAConf UPDATE MECHANISM
+        except ValueError as e:
+            print "EXAConf::WARNING::Detected invalid (non-numerical) version number: '%s'. Updating EXAConf is not possible with this version." % e
+            return 0
+    # }}}
+    # {{{ Check integrity
     def check_integrity(self):
         """
         Checks if the current checksum is valid by computing a new one and comparing them (if the checksum is not 'NONE').
@@ -221,9 +291,8 @@ class EXAConf:
         new_checksum = self.compute_checksum()
         if curr_checksum != new_checksum:
             raise EXAConfIntegrityError("Integrity check failed! The stored checksum '%s' does not match the actual checksum '%s'. Set checksum to 'COMMIT' if you made intentional changes." % (curr_checksum, new_checksum))
-#}}}
-
-#{{{ Update self
+    # }}}
+    # {{{ Update self
     def update_self(self):
         """
         Checks if the EXAConf version stored in the file is older than the current one and
@@ -279,12 +348,36 @@ class EXAConf:
                 # set it to 'COMMIT'
                 if "Checksum" not in self.config["Global"].scalars:
                     self.config["Global"]["Checksum"] = "COMMIT"
+            # 6.1.1 Timezone has been added
+            if self.compare_versions("6.1.1", conf_version) == 1:
+                if "Timezone" not in self.config["Global"]:
+                    self.config["Global"]["Timezone"] = self.def_timezone
+            # 6.1.2 Add users and groups
+            if self.compare_versions("6.1.2", conf_version) == 1:
+                self.add_missing_users_and_groups()
+            # 6.1.3 Add Runtime version and hugepages
+            if self.compare_versions("6.1.3", conf_version) == 1:
+                if "REVersion" not in self.config["Global"].scalars:
+                    self.config["Global"]["REVersion"] = self.re_version
+                if "Hugepages" not in self.config["Global"].scalars:
+                    self.config["Global"]["Hugepages"] = self.def_hugepages
+            # 6.1.4 New BucketFS ownership mechanism
+            if self.compare_versions("6.1.4", conf_version) == 1:
+                if "BucketFS" in self.config.sections:
+                    bfs_owner = self.config["BucketFS"]["ServiceOwner"]
+                    # obsolete 'service_owner' becomes new owner of every BucketFS
+                    for section in self.config.sections:
+                        if self.is_bucketfs(section):
+                            bfs_sec = self.config[section]
+                            bfs_sec["Owner"] = bfs_owner
+                    # delete old global section
+                    del self.config["BucketFS"]
             # always increase version number
             self.config["Global"]["ConfVersion"] = self.version
             self.commit()
-#}}}
+    # }}}
+    # {{{ Check img compat
 
-#{{{ Check img comapt
     def check_img_compat(self):
         """
         Checks if the version of the current EXAConf module and the image version stored in the given EXAConf file are identical. 
@@ -296,13 +389,14 @@ class EXAConf:
             return (True, self.version, img_version)
         else:
             return (False, self.version, img_version)
-#}}}
 
-#{{{ Check update needed
-    def check_update_needed(self, img_version=None, db_version=None, os_version=None):
+    # }}}
+    # {{{ Check update needed
+    def check_update_needed(self, db_version=None, os_version=None, re_version=None, img_version=None):
         """
-        Checks if the current EXAConf file contains image, db or os versions that are different from the given
-        ones (i. e. the installation needs to be updated).
+        Checks if the current EXAConf file contains image, db, os or re versions that are different from the given
+        ones (i. e. the installation needs to be updated). Also checks (since 6.1.3) if the EXAConf file version
+        differs from the EXAConf module version.
         """
         res = ""
         need_update = False
@@ -321,11 +415,21 @@ class EXAConf:
             if self.compare_versions(conf_os_version, os_version) != 0:
                 res += "- os version: %s vs. %s\n" % (conf_os_version, os_version)
                 need_update = True
+        if re_version:
+            conf_re_version = self.get_re_version()
+            if self.compare_versions(conf_re_version, re_version) != 0:
+                res += "- re version: %s vs. %s\n" % (conf_re_version, re_version)
+                need_update = True
+        # always compare EXAConf module vs. file version
+        conf_version = self.config["Global"]["ConfVersion"]
+        if self.compare_versions(self.version, conf_version) != 0:
+            res += "- EXAConf version: %s vs. %s\n" % (conf_version, self.version)
+            need_update = True
 
         return (need_update, res)
-#}}}
+    # }}}
+    # {{{ Set OS version
 
-#{{{ Set OS version
     def set_os_version(self, os_version):
         """
         Stores the given OS (EXAClusterOS) version and builds the path to the OS installation 
@@ -335,9 +439,9 @@ class EXAConf:
         self.os_major_version = self.os_version.split(".")[0].strip()
         self.os_dir = "/usr/opt/EXASuite-" + self.os_major_version + \
                       "/EXAClusterOS-" + self.os_version
-#}}}
 
-#{{{ Set db version
+    # }}}
+    # {{{ Set db version
     def set_db_version(self, db_version):
         """
         Stores the given database (EXASolution) version and builds the path to the database installation 
@@ -347,9 +451,19 @@ class EXAConf:
         self.db_major_version = self.db_version.split(".")[0].strip()
         self.db_dir = "/usr/opt/EXASuite-" + self.db_major_version + \
                       "/EXASolution-" + self.db_version
-#}}}
-
-#{{{ Update db version
+    # }}}
+    # {{{ Set re version
+    def set_re_version(self, re_version):
+        """
+        Stores the given EXARuntime version and builds the path to the runtime binaries
+        based on the version.
+        """
+        self.re_version = re_version.strip()
+        self.re_major_version = self.re_version.split(".")[0].strip()
+        self.re_dir = "/usr/opt/EXASuite-" + self.re_major_version + \
+                      "/EXARuntime-" + self.re_version
+    # }}}
+    # {{{ Update db version
     def update_db_version(self, db_version):
         """
         Replaces all occurences of the database version number with the given one
@@ -369,8 +483,8 @@ class EXAConf:
         curr_db_name = "EXASolution-" + self.db_version
         new_suite_name = "EXASuite-" + db_version.split(".")[0].strip()
         new_db_name = "EXASolution-" + db_version
-        bucketfs_conf = self.get_bucketfs_conf()
-        for bfs in bucketfs_conf.fs.iteritems():
+        bucketfs_conf = self.get_bucketfs()
+        for bfs in bucketfs_conf.iteritems():
             for bucket in bfs[1].buckets.iteritems():
                 bucket_sec = self.config['BucketFS : ' + bfs[0]]['Bucket : ' + bucket[0]]
                 if "AdditionalFiles" in bucket_sec.scalars:
@@ -384,9 +498,8 @@ class EXAConf:
         self.config["Global"]["DBVersion"] = db_version
         self.set_db_version(db_version)
         self.commit()
-#}}}
- 
-#{{{ Update os version
+    # }}}
+    # {{{ Update os version
     def update_os_version(self, os_version):
         """
         Replaces all occurences of the OS version number with the given one
@@ -399,8 +512,8 @@ class EXAConf:
         curr_os_name = "EXAClusterOS-" + self.os_version
         new_suite_name = "EXASuite-" + os_version.split(".")[0].strip()
         new_os_name = "EXAClusterOS-" + os_version
-        bucketfs_conf = self.get_bucketfs_conf()
-        for bfs in bucketfs_conf.fs.iteritems():
+        bucketfs_conf = self.get_bucketfs()
+        for bfs in bucketfs_conf.iteritems():
             for bucket in bfs[1].buckets.iteritems():
                 bucket_sec = self.config['BucketFS : ' + bfs[0]]['Bucket : ' + bucket[0]]
                 if "AdditionalFiles" in bucket_sec.scalars:
@@ -414,9 +527,21 @@ class EXAConf:
         self.config["Global"]["OSVersion"] = os_version
         self.set_os_version(os_version)
         self.commit()
-#}}}
+    # }}}
+    # {{{ Update re version
+    def update_re_version(self, re_version):
+        """
+        Replaces all occurences of the EXARuntime version number with the given one
+        and commits the configuration (used to update the cluster).
+        """
 
-#{{{ Update image version
+        re_version = re_version.strip()
+        # replace global version
+        self.config["Global"]["REVersion"] = re_version
+        self.set_re_version(re_version)
+        self.commit()
+    # }}}
+    # {{{ Update image version
     def update_img_version(self, img_version):
         """
         Updates the EXABase image version.
@@ -425,9 +550,8 @@ class EXAConf:
         self.config["Global"]["ImageVersion"] = img_version
         self.img_version = img_version.strip()
         self.commit()
-#}}}
- 
-#{{{ Clear configuration
+    # }}}
+    # {{{ Clear configuration
     def clear_config(self):
         """
         Clears all content of the 'EXAConf' file and this EXAConf instance.
@@ -435,9 +559,8 @@ class EXAConf:
         self.config.reset()
         self.config.write()
         print "Cleared configuration in '%s'." % self.conf_path
-#}}}
-
-#{{{ Commit
+    # }}}
+    # {{{ Commit
     def commit(self):
         """ 
         Writes the configuration to disk (into '$RootDir/EXAConf')
@@ -464,9 +587,15 @@ class EXAConf:
             os.chmod(self.conf_path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError as e:
             raise EXAConfError("Failed to change permissions for '%s': %s" % (self.conf_path, e))
-#}}}
-
-#{{{ Compute checksum
+    # }}}
+    # {{{ Revert
+    def revert(self):
+        """
+        Revert all changes that have not yet been committed.
+        """
+        self.config.reload()
+    # }}}
+    # {{{ Compute checksum
     def compute_checksum(self):
         """
         Computes the MD5 sum of this EXAConf instance (but does NOT store it).
@@ -488,9 +617,8 @@ class EXAConf:
         self.config["Global"]["Revision"] = curr_revision
         self.config["Global"]["Checksum"] = curr_md5
         return new_md5
-#}}}
-
-#{{{ Get checksum
+    # }}}
+    # {{{ Get checksum
     def get_checksum(self):
         """
         Returns the current checksum that is stored in this EXAConf instance (does NOT compute a new one)."
@@ -500,40 +628,43 @@ class EXAConf:
             return self.config["Global"]["Checksum"]
         else:
             return "NONE"
-#}}}
- 
-#{{{ Write copy
+    # }}}
+    # {{{ Write copy
     def write_copy(self, filename):
         """
         Writes a copy of this EXAConf instance to the given outfile.
         """
         with open(filename, 'w') as f:
             self.config.write(outfile=f)
-#}}}
-
-#{{{ Platform valid
+    # }}}
+    # {{{ Platform valid
     def platform_valid(self, platform):
         """
         Checks if the given platform is in the list of valid platforms.
         """
         return platform.lower() in self.valid_platforms
-#}}}
- 
-#{{{ Is initialized
+    # }}}
+    # {{{ Is initialized
     def initialized(self):
         """
         Checks if the current instance has already been initialized.
         """
         return "Global" in self.config.sections
-#}}}
+    # }}}
+    # {{{ Initialize 
 
-#{{{ Initialize 
     def initialize(self, name, image, num_nodes, device_type, force, platform, 
-                   db_version=None, os_version=None, img_version=None, license=None,
-                   add_archive_volume=True, quiet=False, template_mode=False):
+                   db_version=None, os_version=None, re_version = None,
+                   img_version=None, license=None,
+                   add_archive_volume=True, def_owner = None,
+                   quiet = False, template_mode = False):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
         re-initialized and the current content will be cleared.
+
+        NOTE: 'def_owner' MUST be a tuple of UID:GID in this case (not names), 
+              because we keep the UID but always use the default username
+              (see 'add_default_users()').
         """
 
         # check if EXAConf is already initialized
@@ -551,8 +682,16 @@ class EXAConf:
             self.set_db_version(db_version.strip())
         if os_version and os_version.strip() != "":
             self.set_os_version(os_version.strip())
+        if re_version and re_version.strip() != "":
+            self.set_re_version(re_version.strip())
         if img_version and img_version.strip() != "":
             self.img_version = img_version
+        # determine owner of default entries
+        if def_owner is None:
+            def_owner = (get_euid(), get_egid())
+        else:
+            if not isinstance(def_owner[0], int) or not isinstance(def_owner[1], int):
+                raise EXAConfError("'def_owner' must be a tuple of integers (UID:GID)!")
         # Global section
         self.config["Global"] = {}
         glob_sec = self.config["Global"]
@@ -566,13 +705,17 @@ class EXAConf:
         glob_sec["XMLRPCPort"] = self.def_xmlrpc_port
         glob_sec["Networks"] = "private"
         glob_sec["NameServers"] = ""
+        glob_sec["Timezone"] = self.def_timezone
+        glob_sec["Hugepages"] = self.def_hugepages
         glob_sec["ConfVersion"] = self.version
         glob_sec["OSVersion"] = self.os_version
+        glob_sec["REVersion"] = self.re_version
         glob_sec["DBVersion"] = self.db_version
         glob_sec["ImageVersion"] = self.img_version
         # comments
         glob_sec.comments["Networks"] = ["List of networks for this cluster: 'private' is mandatory, 'public' is optional."]
         glob_sec.comments["NameServers"] = ["Comma-separated list of nameservers for this cluster."]
+        glob_sec.comments["Hugepages"] = ["Nr. of hugepages ('0' = disabled, 'host' = manually configured on the host, 'auto' = set automatically based on DB config)"]
 
         # SSL section
         self.config["SSL"] = {}
@@ -600,6 +743,10 @@ class EXAConf:
             docker_sec.comments["AdditionalVolumes"] = ["Comma-separated list of volumes to be mounted in all containers (e. g. '/mnt/my_data:/exa/my_data:rw' )",
                     "These user-defined volumes are mounted additionally to the internal ones (like the node root volume)"]
 
+        # default users and groups
+        self.add_default_groups(def_owner[1])
+        self.add_default_users(def_owner[0])
+
         # Node sections
         for node in range (1, num_nodes+1):
             node_id = self.max_reserved_node_id + node
@@ -618,127 +765,52 @@ class EXAConf:
         storage_sec.comments["BgRecLimit"] = ["Max. throughput for background recovery / data restoration (in MiB/s)"]
         storage_sec.comments["SpaceWarnThreshold"] = ["Space usage threshold (in percent, per node) for sending a warning"]
         # data volume
-        self.config["EXAVolume : DataVolume1"] = {}
-        data_vol_sec = self.config["EXAVolume : DataVolume1"]
-        data_vol_sec["Type"] = "data"
-        data_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes().keys() ] # list is correctly converted by ConfigObj
-        if template_mode:
-            data_vol_sec["Disk"] = "default"
-        else:
-            data_vol_sec["Disk"] = ""
-        data_vol_sec["Size"] = ""
-        data_vol_sec["Redundancy"] = "1"
-        data_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
-        data_vol_sec["Priority"] = self.def_vol_prio
-        data_vol_sec["Shared"] = self.def_vol_shared
-        data_vol_sec["Labels"] = ""
-        #comments
-        self.config.comments["EXAVolume : DataVolume1"] = ["\n", "An EXAStorage data volume"]
-        data_vol_sec.comments["Type"] = ["Type of volume: 'data' | 'archive'"]
-        data_vol_sec.comments["Nodes"] = ["Comma-separated list of node IDs to be used for this volume (incl. redundancy nodes)"]
-        data_vol_sec.comments["Disk"] = ["Name of the disk to be used for this volume.","This disk must exist on all volume nodes."]
-        data_vol_sec.comments["Size"] = ["Volume size (e. g. '1 TiB')"]
-        data_vol_sec.comments["Redundancy"] = ["Desired redundancy for this volume"]
-        data_vol_sec.comments["Owner"] = ["Volume owner (user and group ID)"]
-        data_vol_sec.comments["Priority"] = ["OPTIONAL: I/O priority (0 = highest, 20 = lowest)"]
-        data_vol_sec.comments["Shared"] = ["OPTIONAL: shared volumes can be opened (for writing) by multiple clients simultaneously"]
-        data_vol_sec.comments["Labels"] = ["OPTIONAL: a comma-separated list of labels for this volume"]
+        self.add_volume(name = "DataVolume1", vol_type = "data", size = "", 
+                        disk = "disk1" if template_mode else "",
+                        redundancy = 1,
+                        nodes = self.get_nodes().keys(),
+                        owner = def_owner)
         # archive volume        
         if add_archive_volume == True:
-            self.config["EXAVolume : ArchiveVolume1"] = {}
-            archive_vol_sec = self.config["EXAVolume : ArchiveVolume1"]
-            archive_vol_sec["Type"] = "archive"
-            archive_vol_sec["Nodes"] = [ str(n) for n in self.get_nodes().keys() ] # list is correctly converted by ConfigObj
-            if template_mode:
-                archive_vol_sec["Disk"] = "default"
-            else:
-                archive_vol_sec["Disk"] = ""
-            archive_vol_sec["Size"] = ""
-            archive_vol_sec["Redundancy"] = "1"
-            archive_vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
-            archive_vol_sec["Labels"] = ""
-            #comments
-            self.config.comments["EXAVolume : ArchiveVolume1"] = ["\n", "An EXAStorage archive volume"]
- 
-        # DB sections
-        self.config["DB : DB1"] = {}
-        db_sec = self.config["DB : DB1"] 
-        db_sec["DataVolume"] = "DataVolume1"
-        db_sec["Version"] = str(self.db_version)
-        db_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
-        db_sec["MemSize"] = '%s GiB' % str(self.get_num_nodes() * 2) # 2 GiB per node
-        db_sec["Port"] = str(self.def_db_port)
-        db_sec["Nodes"] = [ str(n) for n in self.get_nodes() ] # list is correctly converted by ConfigObj
-        db_sec["NumMasterNodes"] = str(self.get_num_nodes())
-        db_sec["Params"] = ""      
-        # comments
-        self.config.comments["DB : DB1"] = ["\n", "An EXASOL database"]
-        db_sec.comments["Version"] = ["The EXASOL version to be used for this database"]
-        db_sec.comments["Owner"] = ["User and group ID that should own this database"]
-        db_sec.comments["MemSize"] = ["Memory size over all nodes (e. g. '1 TiB')"]
-        db_sec.comments["Params"] = ["OPTIONAL: DB parameters"]
-
-         # JDBC sub-section
-        db_sec["JDBC"] = {}
-        jdbc_sec = db_sec["JDBC"]
-        jdbc_sec["BucketFS"] = self.def_bucketfs
-        jdbc_sec["Bucket"] = self.def_bucket
-        jdbc_sec["Dir"] = self.def_jdbc_driver_dir
-        # comments
-        db_sec.comments["JDBC"] = ["OPTIONAL: JDBC driver configuration"]
-        jdbc_sec.comments["BucketFS"] = ["BucketFS that contains the JDBC driver"]
-        jdbc_sec.comments["Bucket"] = ["Bucket that contains the JDBC driver"]
-        jdbc_sec.comments["Dir"] = ["Directory within the bucket that contains the drivers"]
-        # Oracle sub-section
-        db_sec["Oracle"] = {}
-        oracle_sec = db_sec["Oracle"]
-        oracle_sec["BucketFS"] = self.def_bucketfs
-        oracle_sec["Bucket"] = self.def_bucket
-        oracle_sec["Dir"] = self.def_oracle_driver_dir
-        db_sec.comments["Oracle"] = ["OPTIONAL: Oracle driver configuration"]
-        oracle_sec.comments["BucketFS"] = ["BucketFS that contains the JDBC drivers"]
-        oracle_sec.comments["Bucket"] = ["Bucket that contains the JDBC drivers"]
-        oracle_sec.comments["Dir"] = ["Directory within the bucket that contains the drivers"]
-
-        # BucketFS section
-        self.config["BucketFS"] = {}
-        glob_bfs_sec = self.config["BucketFS"]
-        glob_bfs_sec["ServiceOwner"] = str(get_euid()) + " : " + str(get_egid())
-        #comments
-        self.config.comments["BucketFS"] = ["\n","Global BucketFS options"]
-        glob_bfs_sec.comments["ServiceOwner"] = ["User and group ID of the BucketFS process."]
+            self.add_volume(name = "ArchiveVolume1", vol_type = "archive", size = "", 
+                            disk = "disk1" if template_mode else "",
+                            redundancy = 1,
+                            nodes = self.get_nodes().keys(),
+                            owner = def_owner, shared = True)
+        # DB section         
+        self.add_database(name="DB1", version=str(self.db_version), 
+                          mem_size="%s GiB" % str(self.get_num_nodes() *2), #2 GiB per node
+                          port = self.def_db_port,
+                          owner = def_owner,
+                          nodes = self.get_nodes(),
+                          num_master_nodes = self.get_num_nodes(),
+                          data_volume = "DataVolume1",
+                          commit = False)
 
         # The default BucketFS
-        self.config["BucketFS : %s" % self.def_bucketfs] = {}
-        bfs_sec = self.config["BucketFS : %s" % self.def_bucketfs]
-        bfs_sec["HttpPort"] = str(self.def_bucketfs_http_port)
-        bfs_sec["HttpsPort"] = str(self.def_bucketfs_https_port)
-        bfs_sec["SyncKey"] = gen_base64_passwd(32)
-        bfs_sec["SyncPeriod"] = "30000"
-        # comments
-        self.config.comments["BucketFS : %s" % self.def_bucketfs] = ["\n","A Bucket filesystem"]
-        bfs_sec.comments["HttpPort"] = ["HTTP port number (0 = disabled)"]
-        bfs_sec.comments["HttpsPort"] = ["HTTPS port number (0 = disabled)"]
-        bfs_sec.comments["Path"] = ["OPTIONAL: path to this BucketFS (default: %s)" % os.path.join(self.container_root, self.bucketfs_dir)]
+        self.add_bucketfs(name = self.def_bucketfs, owner = def_owner,
+                          http_port = self.def_bucketfs_http_port,
+                          https_port = self.def_bucketfs_https_port, sync_key = None,
+                          sync_period = None, commit = False)
 
         # Bucket sub-section
+        bfs_sec = self.config["BucketFS : %s" % self.def_bucketfs]
         bfs_sec["Bucket : %s" % self.def_bucket] = {}
         bucket_sec = bfs_sec["Bucket : %s" % self.def_bucket]
         bucket_sec["ReadPasswd"] = gen_base64_passwd(22)
         bucket_sec["WritePasswd"] = gen_base64_passwd(22)
         bucket_sec["Public"] = "True"
-        bucket_sec["Name"] = "default"
         bucket_sec["AdditionalFiles"] = "EXAClusterOS:" + os.path.join(self.os_dir, "var/clients/packages/ScriptLanguages-*") + ", " + \
                                         "EXASolution-" + self.db_version + ":" + os.path.join(self.db_dir, "bin/udf/*")
         # comments
-        bfs_sec.comments["Bucket : default"] = ["\n", "A bucket"]
+        bfs_sec.comments["Bucket : default"] = ["The default bucket (auto-generated)"]
 
         self.commit()
         if not quiet:
             print "Successfully initialized configuration in '%s'." % self.conf_path
-# }}}
- 
-#{{{ Validate the configuration
+
+    # }}}
+    # {{{ Validate the configuration
     def validate(self):
         """ Validates the EXAConf configuration file. """
     
@@ -753,7 +825,7 @@ class EXAConf:
             raise EXAConfError("The private network is disabled! Please enable it and specify a private IP for each node.")
 
         # docker specific checks
-        have_docker = (self.get_platform() == "Docker")
+        have_docker = (self.platform_is("Docker"))
         if have_docker:
             if not "Docker" in self.config.sections:
                 raise EXAConfError("Docker platform is specified but 'Docker' section is missing!")
@@ -821,66 +893,58 @@ class EXAConf:
         dup = self.get_duplicates(all_pub_nets)
         if dup and len(dup) > 0:
             raise EXAConfError("Detected duplicate public networks: %s!" % dup)
-#}}}
-
-#{{{ Check if section is a node
+    # }}}
+    # {{{ Check if section is a node
     def is_node(self, section):
         """
         Returns true if the given section is a node.
         """
         return section.split(":")[0].strip() == "Node"
-#}}}
- 
-#{{{ Check if section is a volume
+    # }}}
+    # {{{ Check if section is a volume
     def is_volume(self, section):
         """
         Returns true if the given section is an EXAStorage volume.
         """
         return section.split(":")[0].strip() == "EXAVolume"
-#}}}
-  
-#{{{ Check if section is a remote volume
+    # }}}
+    # {{{ Check if section is a remote volume
     def is_remote_volume(self, section):
         """
         Returns true if the given section is a remote volume.
         """
         return section.split(":")[0].strip() == "RemoteVolume"
-#}}}
-  
-#{{{ Check if section is a database
+    # }}}
+    # {{{ Check if section is a database
     def is_database(self, section):
         """
         Returns true if the given section is an EXASolution database.
         """
         return section.split(":")[0].strip() == "DB"
-#}}}
-   
-#{{{ Check if section is a BucketFS
+    # }}}
+    # {{{ Check if section is a BucketFS
     def is_bucketfs(self, section):
         """
         Returns true if the given section is a BucketFS.
         """
         # don't try to split the global section!
         return section != "BucketFS" and section.split(":")[0].strip() == "BucketFS"
-#}}}
-                                                           
-#{{{ Check if section is a bucket
+    # }}}
+    # {{{ Check if section is a bucket
     def is_bucket(self, section):
         """
         Returns true if the given section is a bucket.
         """
         return section.split(":")[0].strip() == "Bucket"
-#}}}
-                                                            
-#{{{ Check if section is a disk
+    # }}}
+    # {{{ Check if section is a disk
     def is_disk(self, section):
         """
         Returns true if the given section is a disk.
         """
         return section.split(":")[0].strip() == "Disk"
-#}}}
- 
-#{{{ Check if IP is valid
+    # }}}
+    # {{{ Check if IP is valid
     def ip_is_valid(self, ip):
         """
         Returns true if the given string is a valid IP address (v4 or v6).
@@ -890,9 +954,8 @@ class EXAConf:
             return True
         except ValueError:
             return False
-#}}}
- 
-#{{{ Check if network is valid
+    # }}}
+    # {{{ Check if network is valid
     def net_is_valid(self, net):
         """
         Returns true if the given string is a valid IP network (v4 or v6).
@@ -902,9 +965,8 @@ class EXAConf:
             return True
         except ValueError:
             return False
-#}}}
-  
-#{{{ Get network prefix len
+    # }}}
+    # {{{ Get network prefix len
     def get_net_pref_len(self, net):
         """
         Returns the prefix len of the given network (or -1 if network is not valid).
@@ -914,21 +976,23 @@ class EXAConf:
             return plen
         except ValueError:
             return -1
-#}}}
-
-#{{{ Get network string
-    def get_net_str(self, net):
+    # }}}
+    # {{{ To net string
+    def to_net_str(self, net, nid):
         """
-        Converts the given string to a full network string (e.g. by adding the prefixlen).
+        Checks and converts the given string to a full network string (e.g. by adding the prefixlen).
         """
+        # replace 'x' and 'X' in IP with the node ID
+        node_net = re.sub('[xX]+', str(nid), net)
+        if not self.net_is_valid(node_net):
+            raise EXAConfError("String '%s' is not a valid network (valid example: '10.10.10.11/16')!" % node_net)
         try:
             res = str(ipaddr.IPNetwork(net))
             return res
         except ValueError:
             raise EXAConfError("Failed to convert '%s' to an IP network." % net)
-#}}}
- 
-#{{{ IP type
+    # }}}
+    # {{{ IP type
     def ip_type(self, ip):
         """
         Returns 4 if the given string is a valid IPv4 address and 6 if it's
@@ -943,9 +1007,8 @@ class EXAConf:
             return 6
         except ipaddr.AddressValueError: pass
         return 0
-#}}}            
- 
-#{{{ Has private network
+    # }}}            
+    # {{{ Has private network
     def has_priv_net(self):
         """ 
         Returns true if a private network is enabled in EXAConf.
@@ -955,9 +1018,8 @@ class EXAConf:
         except ValueError:
             return False
         return priv
-#}}}
-
-#{{{ Has public network
+    # }}}
+    # {{{ Has public network
     def has_pub_net(self):
         """ 
         Returns true if a public network is enabled in EXAConf.
@@ -967,9 +1029,9 @@ class EXAConf:
         except ValueError:
             return False
         return pub
-#}}}
+    # }}}
 
-# {{{ Add node
+    # {{{ Add node
     def add_node(self, priv_net, nid = None, name = None, pub_net = None,
                  template_mode = False, commit = True):
         """
@@ -979,7 +1041,7 @@ class EXAConf:
         """
 
         # determine ID and name
-        node_id = nid
+        node_id = int(nid)
         if node_id is None:
             node_id = self.get_max_node_id() + 1
         elif self.node_exists(node_id):
@@ -992,17 +1054,10 @@ class EXAConf:
         if priv_net is None:
             raise EXAConfError("The private network has to be specified when adding a node!")
 
-        # replace 'x' and 'X' in IP with the node ID
         if priv_net != None:
-            priv_net = re.sub('[xX]+', str(node_id), priv_net)
-            if not self.net_is_valid(priv_net):
-                raise EXAConfError("String '%s' is not a valid network (valid example: '10.10.10.11/16')!" % priv_net)
-            priv_net = self.get_net_str(priv_net)
+            priv_net = self.to_net_str(priv_net, node_id)
         if pub_net != None:
-            pub_net = re.sub('[xX]+', str(node_id), pub_net)
-            if not self.net_is_valid(pub_net):
-                raise EXAConfError("String '%s' is not a valid network (valid example: '10.10.10.11/16')!" % pub_net)
-            pub_net = self.get_net_str(pub_net)
+            pub_net = self.to_net_str(pub_net, node_id)
 
         # create the node section
         node_sec_name = "Node : " + str(node_id)
@@ -1014,10 +1069,10 @@ class EXAConf:
         node_sec["UUID"] = gen_node_uuid()
         # Add device template in template mode (given device is ignored)
         if template_mode:
-            node_sec["Disk : default"] = {"Devices" : "dev.1 #'dev.1' must be located in '%s'" 
+            node_sec["Disk : disk1"] = {"Devices" : "dev.1 #'dev.1' must be located in '%s'" 
                     % os.path.join(self.container_root, self.storage_dir)}
         # Docker specific options:
-        if self.get_platform() == "Docker":
+        if self.platform_is("Docker"):
             node_sec["DockerVolume"] = "n" + str(node_id)
             node_sec["ExposedPorts"] = str(self.def_db_port) + ":" + str(self.def_db_port + node_id)
             if self.def_bucketfs_http_port > 0:
@@ -1027,7 +1082,7 @@ class EXAConf:
             # Docker comments
             node_sec.comments["ExposedPorts"] = ["Ports to be exposed (container : host)"]
         # other platform options
-        elif self.get_platform().upper() == "VM":
+        elif self.platform_is("VM"):
             node_sec["PrivateInterface"] = "eth0"
             node_sec["PublicInterface"] = "eth1"
         #comments
@@ -1035,30 +1090,8 @@ class EXAConf:
 
         if commit:
             self.commit()
-# }}}
-
-# {{{ Remove node
-    def remove_node(self, nid, force  = False, commit = True):
-        """
-        Removes the given node from the EXAConf if it is not part of an EXAStorage volume
-        or a database (this check is skipped if 'force' is True).
-        """
-
-        if not self.node_exists(nid):
-            raise EXAConfError("Node '%s' can't be removed because it does not exist!" % str(nid))
-
-        if force is False:
-            usage = self.get_node_usage(nid)
-            if usage is not None:
-                raise EXAConfError("Node '%s' can't be removed because it's in use!" % str(nid))
-
-        del self.config["Node : %s" % str(nid)]
-
-        if commit:
-            self.commit()
-# }}}
-
-#{{{ Set node conf
+    # }}}
+    # {{{ Set node conf
     def set_node_conf(self, node_conf, node_id, remove_disks=False):
         """
         Changes the values of the given keys for the given node (or all nodes). 
@@ -1090,10 +1123,12 @@ class EXAConf:
                     node_sec["Name"] = node_conf.name
                 if "uuid" in node_conf:
                     node_sec["UUID"] = str(node_conf.uuid)
+                # private and public network
                 if "private_net" in node_conf:
-                    node_sec["PrivateNet"] = node_conf.private_net
+                    node_sec["PrivateNet"] = self.to_net_str(node_conf.private_net, node[0])
                 if "public_net" in node_conf:
-                    node_sec["PublicNet"] = node_conf.public_net
+                    node_sec["PublicNet"] = self.to_net_str(node_conf.public_net, node[0])
+                # private and public IP
                 if "private_ip" in node_conf:
                     if "PrivateNet" in node_sec.scalars and node_sec["PrivateNet"].strip() != "":
                         node_sec["PrivateNet"] = "/".join([node_conf.private_ip, str(self.get_net_pref_len(node_sec["PrivateNet"]))])
@@ -1109,10 +1144,6 @@ class EXAConf:
                 if "exposed_ports" in node_conf:
                     ports = ", ".join([":".join([str(p[0]), str(p[1])]) for p in node_conf.exposed_ports])
                     node_sec["ExposedPorts"] = ports 
-                if "private_interface" in node_conf:
-                    node_sec["PrivateInterface"] = node_conf.private_interface
-                if "public_interface" in node_conf:
-                    node_sec["PublicInterface"] = node_conf.public_interface
                 # disks
                 # a.) delete disks that don't exist in the node_conf
                 if remove_disks is True:
@@ -1138,16 +1169,37 @@ class EXAConf:
                         node_sec["Disk : " + name] = disk_sec
 
         self.commit()
-#}}}
+    # }}}
+    # {{{ Remove node
+    def remove_node(self, nid, force  = False, commit = True):
+        """
+        Removes the given node from the EXAConf if it is not part of an EXAStorage volume
+        or a database (this check is skipped if 'force' is True).
+        """
 
-# {{{ Add volume
-    def add_volume(self, name, vol_type, size, disk, redundancy, nodes, 
-                   num_master_nodes = None, owner = None, permissions = None,
-                   labels = None, block_size = None,  stripe_size = None,
+        if not self.node_exists(nid):
+            raise EXAConfError("Node '%s' can't be removed because it does not exist!" % str(nid))
+
+        if force is False:
+            usage = self.get_node_usage(nid)
+            if usage is not None:
+                raise EXAConfError("Node '%s' can't be removed because it's in use!" % str(nid))
+
+        del self.config["Node : %s" % str(nid)]
+
+        if commit:
+            self.commit()
+    # }}}
+
+    # {{{ Add volume
+    def add_volume(self, name, vol_type, size, disk, redundancy, nodes, owner,
+                   num_master_nodes = None, permissions = None, labels = None, 
+                   block_size = None,  stripe_size = None, shared = None,
                    commit = True):
         """
         Adds a new volume to the EXAConf. 'size' can either be an int (repr. the nr. of bytes)
-        o ar a string (repr. units, as created by 'utils.bytes2units').
+        o ar a string (repr. units, as created by 'utils.bytes2units'). 'owner' must be a tuple
+        of IDs.
         """
 
         # sanity checks
@@ -1157,42 +1209,66 @@ class EXAConf:
         if permissions is None:
             permissions = self.def_vol_perm
         if block_size is None:
-            block_size = self.def_vol_block_size
+            if vol_type == "data":
+                block_size = self.def_vol_block_size
+            elif vol_type == "archive":
+                block_size = self.def_arch_vol_block_size
         if stripe_size is None:
-            stripe_size = self.def_vol_stripe_size
+            if vol_type == "data":
+                stripe_size = self.def_vol_stripe_size
+            elif vol_type == "archive":
+                stripe_size = self.def_arch_vol_stripe_size
         if num_master_nodes is None:
             num_master_nodes = len(nodes)
-        if owner is None:
-            owner = (get_euid(), get_egid())
+        if shared is None:
+            shared = self.def_vol_shared if type == "data" else self.def_arch_vol_shared
         # check if volume already exists
         if self.volume_exists(name) or self.remote_volume_exists(name):
             raise EXAConfError("Volume '%s' can't be added because that name is already in use!" % name)
+        # check if given owner exists
+        if not self.uid_exists(owner[0]):
+            raise EXAConfError("Can't add volume '%s' because owner with UID %i doesn't exist!\n" % (name, owner[0])) 
+        if not self.gid_exists(owner[1]):
+            raise EXAConfError("Can't add volume '%s' because owner group with GID %i doesn't exist!\n" % (name, owner[1])) 
 
         # create the volume section
         vol_sec_name = "EXAVolume : " + str(name)
         self.config[vol_sec_name] = {}
         vol_sec = self.config[vol_sec_name]
         vol_sec["Type"] = vol_type
-        vol_sec["Size"] = size if isinstance(size, str) else bytes2units(size)
+        vol_sec["Size"] = size if is_str(size) else bytes2units(size)
         vol_sec["Disk"] = disk
-        vol_sec["Redundancy"] = redundancy
+        vol_sec["Nodes"] = ','.join([str(x) for x in nodes])
         vol_sec["NumMasterNodes"] = str(num_master_nodes)
+        vol_sec["Redundancy"] = redundancy
         vol_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
         vol_sec["Permissions"] = permissions
-        vol_sec["Nodes"] = [ str(n) for n in nodes ]
         vol_sec["BlockSize"] = block_size if isinstance(block_size, str) else bytes2units(block_size)
         vol_sec["StripeSize"] = stripe_size if isinstance(stripe_size, str) else bytes2units(stripe_size)
+        # optional values
         if labels:
             vol_sec["Labels"] = [ str(l) for l in labels ]
-
+        vol_sec["Shared"] = str(shared)
+        vol_sec["Priority"] = self.def_vol_prio
+        #comments
+        self.config.comments[vol_sec_name] = ["\n", "An EXAStorage volume"]
+        vol_sec.comments["Type"] = ["Type of volume: 'data' | 'archive'"]
+        vol_sec.comments["Owner"] = ["User and group IDs that own this volume (e. g. '1000:1005')"]
+        vol_sec.comments["Disk"] = ["Name of the disk to be used for this volume.","This disk must exist on all volume nodes."]
+        vol_sec.comments["Size"] = ["Volume size (e. g. '1 TiB')"]
+        vol_sec.comments["Redundancy"] = ["Desired redundancy for this volume"]
+        vol_sec.comments["Nodes"] = ["Comma-separated list of node IDs for this volume (put dedicated redundancy nodes at the end, if any)"]
+        vol_sec.comments["NumMasterNodes"] = ["OPTIONAL: Nr. of master nodes for this volume. Remaining nodes will be used for redundancy only."]
+        vol_sec.comments["Priority"] = ["OPTIONAL: I/O priority (0 = highest, 20 = lowest)"]
+        vol_sec.comments["Shared"] = ["OPTIONAL: shared volumes can be opened (for writing) by multiple clients simultaneously"]
+        vol_sec.comments["Labels"] = ["OPTIONAL: a comma-separated list of labels for this volume"]
         if commit:
             self.commit()
-# }}}
- 
-# {{{ Add remote volume
-    def add_remote_volume(self, vol_type, url, name = None, ID = None,
-                          labels = None, username = None, password = None, 
-                          options = None, owner = None, commit = True):
+    # }}}
+    # {{{ Add remote volume
+    def add_remote_volume(self, vol_type, url, owner, name = None, vid = None,
+                          labels = None, username = None, passwd = None, 
+                          options = None, commit = True):
         """
         Adds a new remote volume to the EXAConf.
         """
@@ -1201,34 +1277,36 @@ class EXAConf:
         if vol_type not in self.valid_remote_vol_types:
             raise EXAConfError("Remote volume type '%s' is not valid!" % vol_type)
         # create ID if not given
-        if ID is None:
-            ID = int(self.get_max_remote_volume_id()) + 1
+        if vid is None:
+            vid = int(self.get_max_remote_volume_id()) + 1
         # create name from ID if not given
         if name is None:
-            name = "r%04i" % (int(ID) - self.remote_vol_id_offset)
+            name = "r%04i" % (int(vid) - self.remote_vol_id_offset)
         # check if volume already exists
         if self.remote_volume_exists(name) or self.volume_exists(name):
             raise EXAConfError("Remote volume '%s' can't be added because that name is already in use!" % name)
         # check if ID is over 10000
-        if ID < self.remote_vol_id_offset:
+        if vid < self.remote_vol_id_offset:
             raise EXAConfError("Remote volume IDs must be >= %i!" % self.remote_vol_id_offset)
         # check if ID is not yet used
-        if self.remote_volume_id_exists(ID):
-            raise EXAConfError("Remote volume with ID %i already exists!" % ID)
+        if self.remote_volume_id_exists(vid):
+            raise EXAConfError("Remote volume with ID %i already exists!" % vid)
+        # check if given owner exists
+        if not self.uid_exists(owner[0]):
+            raise EXAConfError("Can't add remote volume '%s' because owner with UID %i doesn't exist!\n" % (name, owner[0])) 
+        if not self.gid_exists(owner[1]):
+            raise EXAConfError("Can't add remote volume '%s' because owner group with GID %i doesn't exist!\n" % (name, owner[1])) 
 
         # create the volume section
         vol_sec_name = "RemoteVolume : " + str(name)
         self.config[vol_sec_name] = {}
         vol_sec = self.config[vol_sec_name]
         vol_sec["Type"] = vol_type
-        vol_sec["ID"] = ID
+        vol_sec["ID"] = vid
         vol_sec["URL"] = url
         vol_sec["Username"] = username if username is not None else "anonymous"
-        vol_sec["Password"] = password if password is not None else ""   
-        if owner:
-            vol_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
-        else:
-            vol_sec["Owner"] = str(get_euid()) + " : " + str(get_egid())
+        vol_sec["Passwd"] = passwd if passwd is not None else ""   
+        vol_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
         # optional values
         if labels:
             vol_sec["Labels"] = [ str(l) for l in labels ]
@@ -1237,9 +1315,8 @@ class EXAConf:
 
         if commit:
             self.commit()
-# }}}
- 
-# {{{ Remove volume
+    # }}}
+    # {{{ Remove volume
     def remove_volume(self, name, force = False, commit = True):
         """
         Removes the given volume from the EXAConf if it is not used by a database
@@ -1258,9 +1335,8 @@ class EXAConf:
 
         if commit:
             self.commit()
-# }}}
- 
- # {{{ Remove remote volume
+    # }}}
+    # {{{ Remove remote volume
     def remove_remote_volume(self, name=None, ID=None, force = False, commit = True):
         """
         Removes the given remote volume from the EXAConf if it is not used by a database
@@ -1284,19 +1360,18 @@ class EXAConf:
 
         if commit:
             self.commit()
-# }}}
- 
-#{{{ Set volume conf
-    def set_volume_conf(self, vol_conf, vol_name):
+    # }}}
+    # {{{ Set volume conf
+    def set_volume_conf(self, vol_conf, vol_name, commit=True):
         """
-        Changes the values of the given keys for the given volumes
+        Changes the values of the given keys for the given volume
         (or all volumes). The  following options can't be changed and are
         therefore ignored: 'name', 'type', 'block_size' and 'stripe_size'.
 
-        If 'volume' == 'all', the given vol_configuration is applied to all volumes.
+        If 'vol_name' == 'all', the given vol_configuration is applied to all volumes.
         Take care to remove all options that should not be changed.
 
-        If a volume with the given ID does not exist, it will be added and the
+        If a volume with the given name does not exist, it will be added and the
         given configuration will be applied. In that case the given 'vol_conf'
         must contain all mandatory parameters for 'add_volume()'!
         """
@@ -1309,7 +1384,9 @@ class EXAConf:
                             vol_conf.labels if "labels" in vol_conf else None,
                             vol_conf.permissions if "permissions" in vol_conf else None,
                             vol_conf.block_size if "block_size" in vol_conf else None,
-                            vol_conf.stripe_size if "stripe_size" in vol_conf else None)
+                            vol_conf.stripe_size if "stripe_size" in vol_conf else None,
+                            vol_conf.shared if "shared" in vol_conf else None,
+                            commit = commit)
             # nothing to change, since the ID can't be "all"
             return
 
@@ -1319,7 +1396,7 @@ class EXAConf:
             if vol_name == "all" or vol[0] == vol_name:
                 vol_sec = self.config["EXAVolume : " + vol[0]]
                 if "size" in vol_conf:
-                    vol_sec["Size"] = str(bytes2units(vol_conf.size))
+                    vol_sec["Size"] = vol_conf.size if is_str(vol_conf.size) else bytes2units(vol_conf.size)
                 if "disk" in vol_conf:
                     vol_sec["Disk"] = vol_conf.disk
                 if "redundancy" in vol_conf:
@@ -1329,7 +1406,7 @@ class EXAConf:
                 if "permissions" in vol_conf:
                     vol_sec["Permissions"] = str(vol_conf.permissions)
                 if "nodes" in vol_conf:
-                    vol_sec["Nodes"] = [ str(n) for n in vol_conf.nodes ]
+                    vol_sec["Nodes"] = ','.join([str(x) for x in vol_conf.nodes])
                 if "num_master_nodes" in vol_conf:
                     vol_sec["NumMasterNodes"] = str(vol_conf.num_master_nodes)
                 if "priority" in vol_conf:
@@ -1338,11 +1415,10 @@ class EXAConf:
                     vol_sec["Shared"] = str(vol_conf.shared)
                 if "labels" in vol_conf:
                     vol_sec["Labels"] = [ str(l) for l in vol_conf.labels ]
-
-        self.commit()
-#}}}
- 
-#{{{ Set remote volume conf
+        if commit:
+            self.commit()
+    # }}}
+    # {{{ Set remote volume conf
     def set_remote_volume_conf(self, vol_conf, vname):
         """
         Changes the values of the given keys for the given remote volumes
@@ -1362,7 +1438,7 @@ class EXAConf:
         if vname != "all" and not self.remote_volume_exists(vname):
             self.add_remote_volume(vol_conf.name, vol_conf.type, vol_conf.url,
                                    vol_conf.username if "username" in vol_conf else None,
-                                   vol_conf.password if "password" in vol_conf else None,
+                                   vol_conf.passwd if "passwd" in vol_conf else None,
                                    vol_conf.labels if "labels" in vol_conf else None,
                                    vol_conf.options if "options" in vol_conf else None,
                                    vol_conf.owner if "owner" in vol_conf else None)
@@ -1378,8 +1454,8 @@ class EXAConf:
                     vol_sec["URL"] = vol_conf.url
                 if "username" in vol_conf:
                     vol_sec["Username"] = vol_conf.username
-                if "password" in vol_conf:
-                    vol_sec["Password"] = vol_conf.password
+                if "passwd" in vol_conf:
+                    vol_sec["Passwd"] = vol_conf.passwd
                 if "labels" in vol_conf:
                     vol_sec["Labels"] = [ str(l) for l in vol_conf.labels ]
                 if "options" in vol_conf:
@@ -1388,9 +1464,9 @@ class EXAConf:
                     vol_sec["Owner"] = vol_conf.owner
 
         self.commit()
-#}}}
-  
-#{{{ Add database
+    # }}}
+
+    # {{{ Add database
     def add_database(self, name, version, mem_size, port, owner, nodes, num_master_nodes, data_volume,
                      params = None, ldap_servers = None, enable_auditing = None, interfaces = None, 
                      volume_quota = None, volume_move_delay = None, commit = True):
@@ -1398,14 +1474,20 @@ class EXAConf:
         Adds a new database to EXAConf.
         """
 
+        # check if given owner exists
+        if not self.uid_exists(owner[0]):
+            raise EXAConfError("Can't add database '%s' because owner with UID %i doesn't exist!\n" % (name, owner[0])) 
+        if not self.gid_exists(owner[1]):
+            raise EXAConfError("Can't add database '%s' because owner group with GID %i doesn't exist!\n" % (name, owner[1])) 
+
         db_sec_name = "DB : " + str(name)
         self.config[db_sec_name] = {}
         db_sec = self.config[db_sec_name]
         db_sec["Version"] = version
         db_sec["MemSize"] = mem_size
         db_sec["Port"] = port
-        db_sec["Nodes"] = [ str(n) for n in nodes ]
         db_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
+        db_sec["Nodes"] = ','.join([str(x) for x in nodes])
         db_sec["NumMasterNodes"] = num_master_nodes
         db_sec["DataVolume"] = data_volume
         # optional values
@@ -1421,12 +1503,41 @@ class EXAConf:
             db_sec["VolumeQuota"] = bytes2units(volume_quota)
         if volume_move_delay:
             db_sec["VolumeMoveDelay"] = volume_move_delay
-
+        
+        # comments
+        self.config.comments[db_sec_name] = ["\n", "An EXASOL database"]
+        db_sec.comments["Version"] = ["Version nr. of this database."]
+        db_sec.comments["Owner"] = ["User and group IDs that own this database (e. g. '1000:1005')."]
+        db_sec.comments["MemSize"] = ["Memory size over all nodes (e. g. '1 TiB')."]
+        db_sec.comments["Nodes"] = ["Comma-separated list of node IDs for this DB (put reserve nodes at the end, if any)."]
+        db_sec.comments["NumMasterNodes"] = ["Nr. of initially active nodes for this DB. The remaining nodes will be reserve nodes."]
+        db_sec.comments["DataVolume"] = ["Name of the data volume to be used by this database."]
+        db_sec.comments["Params"] = ["OPTIONAL: DB parameters"]
+        # default JDBC sub-section
+        db_sec["JDBC"] = {}
+        jdbc_sec = db_sec["JDBC"]
+        jdbc_sec["BucketFS"] = self.def_bucketfs
+        jdbc_sec["Bucket"] = self.def_bucket
+        jdbc_sec["Dir"] = self.def_jdbc_driver_dir
+        db_sec.comments["JDBC"] = ["JDBC driver configuration"]    
+        jdbc_sec.comments["BucketFS"] = ["BucketFS that contains the JDBC driver"]
+        jdbc_sec.comments["Bucket"] = ["Bucket that contains the JDBC driver"]
+        jdbc_sec.comments["Dir"] = ["Directory within the bucket that contains the drivers"]
+        # default Oracle sub-section
+        db_sec["Oracle"] = {}
+        oracle_sec = db_sec["Oracle"]
+        oracle_sec["BucketFS"] = self.def_bucketfs
+        oracle_sec["Bucket"] = self.def_bucket
+        oracle_sec["Dir"] = self.def_oracle_driver_dir
+        db_sec.comments["Oracle"] = ["Oracle driver configuration"]
+        oracle_sec.comments["BucketFS"] = ["BucketFS that contains the JDBC drivers"]
+        oracle_sec.comments["Bucket"] = ["Bucket that contains the JDBC drivers"]
+        oracle_sec.comments["Dir"] = ["Directory within the bucket that contains the drivers"]
+  
         if commit:
             self.commit()
-#}}}
-
-#{{{ Remove database
+    # }}}
+    # {{{ Remove database
     def remove_database(self, name, commit = True):
         """
         Remove the given database from EXAConf.
@@ -1439,10 +1550,9 @@ class EXAConf:
 
         if commit:
             self.commit()
-#}}}
-
-#{{{ Set database conf
-    def set_database_conf(self, db_conf, db_name):
+    # }}}
+    # {{{ Set database conf
+    def set_database_conf(self, db_conf, db_name, commit=True):
         """
         Changes the values of the given keys for the given database
         (or all databases). The name can't be changed and is therefore
@@ -1473,78 +1583,464 @@ class EXAConf:
         
         dbs = self.get_databases()
         for db in dbs.iteritems():
-            db_sec = self.config["DB : " + db[0]]
-            if "version" in db_conf:
-                db_sec["Version"] = db_conf.version
-            if "data_volume" in db_conf:
-                db_sec["DataVolume"] = db_conf.data_volume
-            if "mem_size" in db_conf:
-                db_sec["MemSize"] = db_conf.mem_size
-            if "port" in db_conf:
-                db_sec["Port"] = db_conf.port
-            if "nodes" in db_conf:
-                db_sec["Nodes"] = [ str(n) for n in db_conf.nodes ]
-            if "num_master_nodes" in db_conf:
-                db_sec["NumMasterNodes"] = db_conf.num_master_nodes
-            if "owner" in db_conf:
-                db_sec["Owner"] = str(db_conf.owner[0]) + " : " + str(db_conf.owner[1])
-            if "params" in db_conf:
-                db_sec["Params"] = db_conf.params
-            if "ldap_servers" in db_conf:
-                db_sec["LdapServers"] = db_conf.ldap_servers
-            if "enable_auditing" in db_conf:
-                db_sec["EnableAuditing"] = str(db_conf.enable_auditing)
-            if "interfaces" in db_conf:
-                db_sec["Interfaces"] = db_conf.interfaces
-            if "volume_quota" in db_conf:
-                db_sec["VolumeQuota"] = bytes2units(db_conf.volume_quota)
-            if "volume_move_delay" in db_conf:
-                db_sec["VolumeMoveDelay"] = db_conf.volume_move_delay
-            if "jdbc" in db_conf:
-                db_sec["JDBC"] = db_conf.jdbc
-            if "oracle" in db_conf:
-                db_sec["Oracle"] = db_conf.oracle
+            if db_name == "all" or db[0] == db_name:
+                db_sec = self.config["DB : " + db[0]]
+                if "version" in db_conf:
+                    db_sec["Version"] = db_conf.version
+                if "data_volume" in db_conf:
+                    db_sec["DataVolume"] = db_conf.data_volume
+                if "mem_size" in db_conf:
+                    db_sec["MemSize"] = bytes2units(db_conf.mem_size * 1048576) #given in MiB
+                if "port" in db_conf:
+                    db_sec["Port"] = db_conf.port
+                if "nodes" in db_conf:
+                    db_sec["Nodes"] = ','.join([str(x) for x in db_conf.nodes])
+                if "num_master_nodes" in db_conf:
+                    db_sec["NumMasterNodes"] = db_conf.num_master_nodes
+                if "owner" in db_conf:
+                    db_sec["Owner"] = str(db_conf.owner[0]) + " : " + str(db_conf.owner[1])
+                if "params" in db_conf:
+                    db_sec["Params"] = db_conf.params
+                if "ldap_servers" in db_conf:
+                    db_sec["LdapServers"] = db_conf.ldap_servers
+                if "enable_auditing" in db_conf:
+                    db_sec["EnableAuditing"] = str(db_conf.enable_auditing)
+                if "interfaces" in db_conf:
+                    db_sec["Interfaces"] = db_conf.interfaces
+                if "volume_quota" in db_conf:
+                    db_sec["VolumeQuota"] = bytes2units(db_conf.volume_quota)
+                if "volume_move_delay" in db_conf:
+                    db_sec["VolumeMoveDelay"] = db_conf.volume_move_delay
+                if "jdbc" in db_conf:
+                    if "JDBC" in db_sec.sections:
+                        db_sec["JDBC"].update(db_conf.jdbc.to_section())
+                    else:
+                        db_sec["JDBC"] = db_conf.jdbc.to_section()
+                if "oracle" in db_conf:
+                    if "Oracle" in db_sec.sections:
+                        db_sec["Oracle"].update(db_conf.oracle.to_section())
+                    else:
+                        db_sec["Oracle"] = db_conf.oracle.to_section()
 
-        self.commit()
+        if commit:
+	    self.commit()
+    # }}}
+
+    # {{{ Add BucketFS
+    def add_bucketfs(self, name, owner,
+                     http_port, https_port, 
+                     sync_key = None, sync_period = None, 
+                     path = None, commit = True):
+        """
+        Adds a new BucketFS with given name and parameters.
+        """
+        if self.bucketfs_exists(name):
+            raise EXAConfError("BucketFS '%s' can't be added because that name is already in use!" % name)
+        # check if given owner exists
+        if not self.uid_exists(owner[0]):
+            raise EXAConfError("Can't add BucketFS '%s' because owner with UID %i doesn't exist!\n" % (name, owner[0])) 
+        if not self.gid_exists(owner[1]):
+            raise EXAConfError("Can't add BucketFS '%s' because owner group with GID %i doesn't exist!\n" % (name, owner[1])) 
+
+        self.config["BucketFS : %s" % name] = {}
+        bfs_sec = self.config["BucketFS : %s" % name]
+        bfs_sec["Owner"] = str(owner[0]) + ":" + str(owner[1]) 
+        bfs_sec["HttpPort"] = http_port 
+        bfs_sec["HttpsPort"] = https_port
+        bfs_sec["SyncKey"] = sync_key if sync_key else gen_base64_passwd(32)
+        bfs_sec["SyncPeriod"] = sync_period if sync_period else str(self.def_bucketfs_sync_period)
+        if path is not None:
+            bfs_sec["Path"] = path
+
+        # comments
+        self.config.comments["BucketFS : %s" % self.def_bucketfs] = ["\n","The default BucketFS (auto-generated)"]
+        bfs_sec.comments["HttpPort"] = ["HTTP port number (0 = disabled)"]
+        bfs_sec.comments["HttpsPort"] = ["HTTPS port number (0 = disabled)"]
+        if path is not None:
+            bfs_sec.comments["Path"] = ["OPTIONAL: path to this BucketFS (default: %s)" % os.path.join(self.container_root, self.bucketfs_dir)]
+
+        if commit is True:
+            self.commit()
+    # }}}
+    # {{{ Set BucketFS conf
+    def set_bucketfs_conf(self, bfs_conf, bfs_name, commit = True):
+        """
+        Changes the values of the given keys in the given BucketFS section.
+        
+        If 'bfs_name' == 'all', the given bfs_configuration is applied to all BucketFSs.
+        Take care to remove all options that should not be changed.
+
+        If a BucketFS with the given name does not exist, it will be added and the
+        given configuration will be applied. In that case the given 'bfs_conf'
+        must contain all mandatory parameters for 'add_bucketfs()'!
+        """
+
+        if bfs_name != "all" and not self.bucketfs_exists(bfs_name):
+            self.add_bucketfs(name = bfs_name, 
+                              owner = bfs_conf.owner,
+                              http_port = bfs_conf.http_port,
+                              https_port = bfs_conf.https_port,
+                              sync_key = bfs_conf.sync_key if "sync_key" in bfs_conf else None,
+                              sync_period = bfs_conf.sync_perion if "sync_period" in bfs_conf else None,
+                              path = bfs_conf.path if "path" in bfs_conf else None,
+                              commit = commit)
+            return
+                
+        bucketfs_conf = self.get_bucketfs()                
+        for bfs in bucketfs_conf.values():
+            if bfs.name == bfs_name or bfs_name == "all":
+                bfs_sec = self.config["BucketFS : %s" % bfs_name]
+                bfs_sec.update(bfs_conf.to_section(ignore_keys = ['bfs_name']))
+
+        if commit is True:
+            self.commit()
+    # }}}
+    # {{{ Remove BucketFS
+    def remove_bucketfs(self, name, commit = True):
+        """
+        Remove the given BucketFS from EXAConf.
+        """
+        if not self.bucketfs_exists(name):
+            raise EXAConfError("BucketFS '%s' can't be removed because it doesn't exist!" % name)
+
+        del self.config["BucketFS : %s" % name]
+
+        if commit is True:
+            self.commit()
+    # }}}
+    # {{{ Add Bucket
+    def add_bucket(self, name, bfs_name, public,
+                   read_passwd = None, write_passwd = None, 
+                   additional_files = None, commit = True):
+        """
+        Adds a new Bucket to the given BucketFS.
+        """
+        if not self.bucketfs_exists(bfs_name):
+            raise EXAConfError("Bucket '%s' can't be added because BucketFS '%s' does not exist!" % (name, bfs_name))
+        if self.bucket_exists(name, bfs_name):
+            raise EXAConfError("Bucket '%s' already exists in BucketFS '%s'!" % (name, bfs_name))
+        bfs_sec = self.config["BucketFS : %s" % bfs_name]
+        bfs_sec["Bucket : %s" % name] = {}
+        b_sec = bfs_sec["Bucket : %s" % name]
+        b_sec["Public"] = str(public)
+        b_sec["ReadPasswd"] = read_passwd if read_passwd else gen_base64_passwd(32)
+        b_sec["WritePasswd"] = write_passwd if write_passwd else gen_base64_passwd(32)
+        if additional_files:
+            b_sec["AdditionalFiles"] = ",".join(additional_files)
+        
+
+        if commit is True:
+            self.commit()
+    # }}}
+   # {{{ Set Bucket conf
+    def set_bucket_conf(self, b_conf, b_name, bfs_name, commit = True):
+        """
+        Changes the values of the given keys in the given Bucket section.
+        
+        If 'b_name' == 'all', the given bucket_configuration is applied to all Buckets
+        of the given BucketFS. Take care to remove all options that should not be changed.
+
+        If a Bucket with the given name does not exist in the given BucketFS, it will be 
+        added and the  given configuration will be applied. In that case the given 'b_conf'
+        must contain all mandatory parameters for 'add_bucket()'!
+        """
+
+        if not self.bucketfs_exists(bfs_name):
+            raise EXAConfError("Bucket '%s' can't be modified because BucketFS '%s' does not exist!" % (b_name, bfs_name))
+        if b_name != "all" and not self.bucket_exists(b_name, bfs_name):
+            self.add_bucket(name = b_name, bfs_name = bfs_name,
+                            public = b_conf.public,
+                            read_passwd = b_conf.read_passwd if 'read_passwd' in b_conf else None,
+                            write_passwd = b_conf.write_passwd if 'write_passwd' in b_conf else None,
+                            additional_files = b_conf.additional_files if 'additional_files' in b_conf else None,
+                            commit = commit)
+            return
+                
+        bucketfs_conf = self.get_bucketfs()                
+        for bfs in bucketfs_conf.values():
+            if bfs.name == bfs_name:
+                for b in bfs.buckets.values():
+                    if b.name == b_name or b_name == "all":
+                        b_sec = self.config["BucketFS : %s" % bfs_name]["Bucket : %s" % b_name]
+                        b_sec.update(b_conf.to_section(ignore_keys = ['name']))
+
+        if commit is True:
+            self.commit()
+    # }}}
+    # {{{ Remove Bucket
+    def remove_bucket(self, name, bfs_name, commit = True):
+        """
+        Remove the given Bucket from the given BucketFS.
+        """
+        if not self.bucketfs_exists(bfs_name):
+            raise EXAConfError("Bucket '%s' can't be removed because BucketFS '%s' it doesn't exist!" % (name, bfs_name))
+        if not self.bucket_exists(name, bfs_name):
+            raise EXAConfError("Bucket '%s' does not exist in BucketFS '%s'!" % (name, bfs_name))
+        bfs_sec = self.config["BucketFS : %s" % bfs_name]
+        del bfs_sec["Bucket : %s" % name]
+
+        if commit is True:
+            self.commit()
+    # }}}
+
+#{{{ Add user
+    def add_user(self, username, userid, group, login_enabled, 
+                 password = None, encode_passwd = False,
+                 additional_groups = None, authorized_keys = None,
+                 commit = True):
+        """
+        Add the given user to EXAConf. If 'encode_password' is True, the given password string
+        will be encoded as an /etc/shadow compatible SHA512 hash.
+        """
+        
+        if not isinstance(userid, int):
+            raise EXAConfError("UID must be an integer!")
+        if self.user_exists(username):
+            raise EXAConfError("User '%s' can't be added because a user with that name already exists (or name is reserved)!" % username)
+        if self.uid_exists(userid):
+            raise EXAConfError("User '%s' can't be added because a user with ID %i already exists (or ID is reserved)!" % (username, int(userid)))
+        group = self.to_gname(group)
+        if not self.group_exists(group):
+            raise EXAConfError("Main group '%s' of user '%s' does not exist!" % (group, username))
+        # create user section
+        if "Users" not in self.config.sections:
+            self.config["Users"] = {}
+        users_sec = self.config["Users"]
+        users_sec[username] = {}
+        user_sec = users_sec[username]
+        user_sec["ID"] = str(userid)
+        user_sec["Group"] = group
+        user_sec["LoginEnabled"] = login_enabled
+        if password is not None:
+            if encode_passwd is True:
+                user_sec["Passwd"] = encode_shadow_passwd(password)
+            else:
+                user_sec["Passwd"] = password
+        #optional parameters
+        if additional_groups:
+            user_sec["AdditionalGroups"] = [ str(g) for g in additional_groups ]
+        if authorized_keys:
+            user_sec["AuthorizedKeys"] = [ str(k) for k in authorized_keys ]
+
+        #comments
+        self.config.comments["Users"] = ["\n"]    
+
+        if commit:
+            self.commit()
 #}}}
-
-#{{{ Set BucketFS conf
-    def set_bucketfs_conf(self, config):
+#{{{ Set user conf
+    def set_user_conf(self, user_conf, username, encode_passwd = False, extend_groups = False, extend_keys = False):
         """
-        Changes the values of the given keys in the BucketFS section.
+        Changes the values of the given keys for the given user (or all users).
+        The username and ID can't be changed.  If 'encode_passwd' is True, the 
+        password will be encoded as an /etc/shadow compatible SHA512 hash.
+
+        If 'username' == 'all', the given user_conf is applied to all users.
+        Take care to remove all options that should not be changed.
+
+        If a user with the given name does not exist, it will be added and the
+        given configuration will be applied. In that case the given 'user_conf'
+        must contain all mandatory parameters for 'add_user()'!
         """
-
-        bfs_sec = self.config["BucketFS"]
-        if "service_owner" in config:
-            bfs_sec["ServiceOwner"] = str(config.service_owner[0]) + " : " + str(config.service_owner[1])
-
+        if username != "all" and not self.user_exists(username):
+            self.add_user(username = username, userid = user_conf.id,
+                          group = user_conf.group, login_enabled = user_conf.login_enabled,
+                          password = user_conf.passwd if "passwd" in user_conf else None,
+                          encode_passwd = encode_passwd,
+                          additional_groups = user_conf.additional_groups if "additionl_groups" in user_conf else None,
+                          authorized_keys = user_conf.authorized_keys if "authorized_keys" in user_conf else None)  
+            return
+        # change configuration for existing users
+        users = self.get_users()
+        for user in users.items():
+            if username == "all" or user[0] == username:
+                # add missing config options in order to create a complete user entry
+                user_conf.update({k:v for k,v in self.get_users()[username].items() if k not in user_conf})
+                user_sec = self.config["Users"][username]
+                # encode password and merge groups right in the user_conf
+                if "passwd" in user_conf:
+                    if encode_passwd is True:
+                        user_conf.passwd = encode_shadow_passwd(user_conf.passwd)
+                if "additional_groups" in user_conf and len(user_conf.additional_groups) > 0:
+                    if extend_groups and "additional_groups" in user[1]:
+                        # make the items unique
+                        user_conf.additional_groups = list(set(user[1].additional_groups + user_conf.additional_groups))
+                if "authorized_keys" in user_conf and len(user_conf.authorized_keys) > 0:
+                    if extend_keys and "authorized_keys" in user[1]:
+                        user_conf.authorized_keys = list(set(user[1].authorized_keys + user_conf.authorized_keys))
+                user_sec.update(user_conf.to_section())
         self.commit()
-#}}}
- 
-#{{{ Set storage conf
-    def set_storage_conf(self, conf):
+    # }}}
+#{{{ Remove user
+    def remove_user(self, username, commit = True):
         """
-        Set the various configurable EXAStorage parameters.
+        Removes the given user from EXAConf.
         """
-        if "EXAStorage" not in self.config.sections:
-            self.config["EXAStorage"] = {}
-        storage_sec = self.config["EXAStorage"]
 
-        if "bg_rec_enabled" in conf:
-            storage_sec["BgRecEnabled"] = conf.bg_rec_enabled
-        if "bg_rec_limit" in conf:
-            if not conf.bg_rec_limit > 0:
-                raise EXAConfError("Got invalid bg_rec_limit '%i' (must be > 0)!" % conf.bg_rec_limit)
-            storage_sec["BgRecLimit"] = conf.bg_rec_limit
-        if "space_warn_threshold" in conf:
-            if not 0 <= conf.space_warn_threshold <= 100:
-                raise EXAConfError("Got invalid space_warn_threshold '%i' (must be between 0 and 100 percent)!" % conf.space_warn_threshold)
-            storage_sec["SpaceWarnThreshold"] = conf.space_warn_threshold
+        if not self.user_exists(username):
+            raise EXAConfError("User '%s' can't be removed because he doesn't eixist!" % username)
 
+        del self.config["Users"][username]
+
+        if commit:
+            self.commit()
+    # }}}
+
+    # {{{ Add group
+    def add_group(self, groupname, groupid,
+                  commit = True):
+        """
+        Add the given group to EXAConf.
+        """
+        
+        if not isinstance(groupid, int):
+            raise EXAConfError("GID must be an integer!")
+        if self.group_exists(groupname):
+            raise EXAConfError("Group '%s' can't be added because a group with that name already exists (or name is reserved)!" % groupname)
+        if self.gid_exists(groupid):
+            raise EXAConfError("Group '%s' can't be added because a group with ID %i already exists (or ID is reserved)!" % (groupname, int(groupid)))
+        # create group section
+        if "Groups" not in self.config.sections:
+            self.config["Groups"] = {}
+        groups_sec = self.config["Groups"]
+        groups_sec[groupname] = {}
+        group_sec = groups_sec[groupname]
+        group_sec["ID"] = str(groupid)
+
+        #comments
+        self.config.comments["Groups"] = ["\n"]    
+
+        if commit:
+            self.commit()
+    # }}}
+    # {{{ Set group conf
+    def set_group_conf(self, group_conf, group_name):
+        """
+        Changes the values of the given keys for the given group (or all groups).
+        The groupname can't be changed.
+
+        If 'group_name' == 'all', the given group_conf is applied to all groups.
+        Take care to remove all options that should not be changed.
+
+        If a group with the given name does not exist, it will be added and the
+        given configuration will be applied. In that case the given 'group_conf'
+        must contain all mandatory parameters for 'add_group()'!
+        """
+
+        if group_name != "all" and not self.group_exists(group_name):
+            self.add_group(gid = group_conf.id)
+            return
+                            
+        # change configuration for existing groups
+        groups = self.get_groups()
+        for group in groups:
+            if group_name == "all" or group == group_name:
+                group_sec = self.config["Groups"][group_name]
+                group_sec.update(group_conf.to_section())
         self.commit()
+    # }}}
+    # {{{ Remove group
+    def remove_group(self, groupname, commit = True):
+        """
+        Removes the given group from EXAConf.
+        """
+
+        if not self.group_exists(groupname):
+            raise EXAConfError("Group '%s' can't be removed because it doesn't eixist!" % groupname)
+
+        del self.config["Groups"][groupname]
+
+        if commit:
+            self.commit()
+    # }}}
+
+    # {{{ Add missing users and groups
+    def add_missing_users_and_groups(self):
+        """
+        Checks all existing owners and adds corresponding users and groups if they are missing.
+        Also adds the default users and groups.
+        """
+        # find the first existing owner and use it as default UID / GID
+        def_owner = None
+        for db in self.get_databases().values():
+            if "owner" in db:
+                def_owner = db.owner
+                break
+        # add default users and groups
+        self.add_default_groups(exadefgid = def_owner[1] if def_owner is not None else None)
+        self.add_default_users(exadefuid = def_owner[0] if def_owner is not None else None)
+        # now check for missing owners
+        suffixes = [1,1]
+        def check_create_missing(owner, name):
+            uid, gid = owner[0], owner[1]
+            uname = gname = None
+            if not self.gid_exists(gid):
+                gname = "exausers" + str(suffixes[1])
+                suffixes[1] += 1
+                print "Adding group '%s' with GID '%i' (owner of '%s')." % (gname, gid, name)
+                self.add_group(name=gname, gid=gid, commit=False)
+            if not self.uid_exists(uid):
+                uname = "exadefusr" + str(suffixes[0])
+                suffixes[0] += 1
+                print "Adding user '%s' with UID '%i' (owner of '%s')." % (uname, uid, name)
+                self.add_user(name=uname, uid=uid, 
+                              group=gname if gname else "exausers", 
+                              login_enabled=False, commit=False)
+        # databases
+        for dbname, dbconf in self.get_databases().items():
+            check_create_missing(dbconf.owner, dbname)
+        # volumes
+        for volname, volconf in self.get_volumes().items():
+            check_create_missing(volconf.owner, volname)
+        # remote volumes
+        for volname, volconf in self.get_remote_volumes().items():
+            check_create_missing(volconf.owner, volname)
+    # }}}
+    # {{{ Add default users
+    def add_default_users(self, exadefuid=None):
+        """
+        Adds the default user entries to EXAConf. You can specify the UID of the default user with 'exadefuid'.
+        Two users will be created:
+            - 'exadefusr' : UID of the current user the given one. Owns all default objects in EXAConf 
+                             (databases, BucketFS, volumes).
+            - 'root' : UID 0 and GID 0
+        """
+
+        if exadefuid is None:
+            exadefuid = get_euid()
+        exagroups = [ g for g in self.get_groups().keys() if g.startswith("exa") ]
+        # add root user FIRST
+        if not self.uid_exists(0):
+            self.add_user(username = "root", userid = 0, group = "root", login_enabled = True,
+                          additional_groups = exagroups)
+        # add either current user or the given one as default user and make him a member of all 'exa' groups
+        if not self.uid_exists(exadefuid):
+            self.add_user(username="exadefusr", userid = exadefuid, group = "exausers", 
+                          login_enabled = False,
+                          additional_groups = [ g for g in exagroups if g != "exausers" ])
 #}}}
- 
-#{{{ Merge EXAConf
+    # {{{ Add default groups
+    def add_default_groups(self, exadefgid=None):
+        """
+        Adds the default group entries to EXAConf. You can specify the GID of the 'exausers' group with 'exadefgid'.
+        """
+
+        if exadefgid is None:
+            exadefgid = get_egid()
+        if not self.gid_exists(0):
+            self.add_group(groupname = "root", groupid = 0)
+        if not self.gid_exists(exadefgid):
+            self.add_group(groupname = "exausers", groupid = exadefgid);
+        if not self.gid_exists(self.def_groups_start_id+1):
+            self.add_group(groupname = "exadbadm", groupid = self.def_groups_start_id+1)
+        if not self.gid_exists(self.def_groups_start_id+2):
+            self.add_group(groupname = "exastoradm", groupid = self.def_groups_start_id+2)
+        if not self.gid_exists(self.def_groups_start_id+3):
+            self.add_group(groupname = "exabfsadm", groupid = self.def_groups_start_id+3)
+        if not self.gid_exists(self.def_groups_start_id+4):
+            self.add_group(groupname = "exaadm", groupid = self.def_groups_start_id+4)
+    # }}}
+    # {{{ Merge EXAConf
     def merge_exaconfs(self, exaconf_list, allow_self=False, force=False):
         """
         Merges the changes in the given list of EXAConf instances into this one.
@@ -1590,9 +2086,8 @@ class EXAConf:
 
         self.__merge_node_uuids(exaconf_list)
         self.commit()
-#}}}
-
-#{{{ Merge node UUIDs
+    # }}}
+    # {{{ Merge node UUIDs
     def __merge_node_uuids(self, exaconf_list):
         """
         Merges the node UUIDs of the EXAConf instances in the given list into this EXAConf instance. 
@@ -1617,19 +2112,62 @@ class EXAConf:
                         elif node_sec["UUID"] != "IMPORT" and other_node.uuid != "IMPORT":
                             if node_sec["UUID"] != other_node.uuid:
                                 raise EXAConfError("Node %s has different UUIDs: '%s' (current) and '%s' (other)." % (nid, node_sec["UUID"], other_node.uuid))
+    # }}}
+    # {{{ Set timezone
+    def set_timezone(self, tz):
+        """
+        Set the system timezone to the given string.
+
+        Note: the DB timezone can be set individually via 'Params = -sysTZ=Asia/Tokyo'
+        """
+        self.config["Global"]["Timezone"] = str(tz)
+    # }}}
+    # {{{ Set hugepages
+    def set_hugepages(self, hugepages):
+        """
+        Set the system hugepages to the given string.
+        """
+        str_hugepages = str(hugepages).strip().lower()
+        if str_hugepages not in ('host', 'auto'):
+            try:
+                if int(str_hugepages) < 0:
+                    raise RuntimeError()
+            except: raise EXAConfError("Hugepages must be '0', 'host', 'auto' or a positive number of hugepages to allocate.")
+        self.config["Global"]["Hugepages"] = str_hugepages
+    # }}}
+    
+    # {{{ Set storage conf
+    def set_storage_conf(self, conf):
+        """
+        Set the various configurable EXAStorage parameters.
+        """
+        if "EXAStorage" not in self.config.sections:
+            self.config["EXAStorage"] = {}
+        storage_sec = self.config["EXAStorage"]
+
+        if "bg_rec_enabled" in conf:
+            storage_sec["BgRecEnabled"] = conf.bg_rec_enabled
+        if "bg_rec_limit" in conf:
+            if not conf.bg_rec_limit > 0:
+                raise EXAConfError("Got invalid bg_rec_limit '%i' (must be > 0)!" % conf.bg_rec_limit)
+            storage_sec["BgRecLimit"] = conf.bg_rec_limit
+        if "space_warn_threshold" in conf:
+            if not 0 <= conf.space_warn_threshold <= 100:
+                raise EXAConfError("Got invalid space_warn_threshold '%i' (must be between 0 and 100 percent)!" % conf.space_warn_threshold)
+            storage_sec["SpaceWarnThreshold"] = conf.space_warn_threshold
+
+        self.commit()
 #}}}
-          
-############################## GETTER #################################
+    ############################## GETTER #################################
  
-#{{{ Get section ID 
+    # {{{ Get section ID 
     def get_section_id(self, section):
         """
         Extracts and returns the part behind the ':' from the given section.
         """
         return section.split(":")[1].strip()
-#}}}
- 
-#{{{ Get revision
+    # }}}
+    # {{{ Get revision
     def get_revision(self):
         """
         Returns the EXAConf revision number (or 0, if not found).
@@ -1638,33 +2176,58 @@ class EXAConf:
             return int(self.config["Global"]["Revision"])
         else:
             return 0
-#}}}
-
-#{{{ Get conf path
+    # }}}
+    # {{{ Get conf path
     def get_conf_path(self):
         """
         Returns the path to '$RootDir/EXAConf'.
         """
         return self.conf_path
-#}}}
-
-#{{{ Get platform
+    # }}}
+    # {{{ Get platform
     def get_platform(self):
         """
         Returns the platform of the current EXAConf.
         """
         return self.config["Global"]["Platform"]
-#}}}    
-  
-#{{{ Get cluster name
+    # }}}    
+    # {{{ Platform is
+    def platform_is(self, platform):
+        """
+        Check if the given platform equals the one defined in EXAConf. Correctly handles upper/lower/camelcase.
+        """
+        return self.get_platform().lower() == platform.lower()
+    # }}}
+    # {{{ Get timezone
+    def get_timezone(self):
+        """
+        Return the system timezone configured in the 'Global' section of EXAConf 
+        (or the defualt timezone if there's none).
+        """
+        if "Timezone" in self.config["Global"]:
+            return self.config["Global"]["Timezone"]
+        else:
+            return self.def_timezone
+    # }}}
+    # {{{ Get hugepages
+    def get_hugepages(self):
+        """
+        Return the system hugepages configured in the 'Global' section of EXAConf.
+        Can be an integer or word 'auto', number '0' means hugepages should not be configured.
+        """
+        if "Hugepages" in self.config["Global"]:
+            return str(self.config["Global"]["Hugepages"]).strip().lower()
+        else:
+            return self.def_hugepages
+    # }}}
+    # {{{ Get cluster name
     def get_cluster_name(self):
         """
         Returns the cluster name.
         """
         return self.config["Global"]["ClusterName"]
-#}}}
-  
-#{{{ Get db version
+    # }}}
+    # {{{ Get db version
     def get_db_version(self):
         """
         Returns the current DB version.
@@ -1673,9 +2236,8 @@ class EXAConf:
             return self.config["Global"]["DBVersion"]
         else:
             return self.db_version
-#}}}
-   
-#{{{ Get os version
+    # }}}
+    # {{{ Get os version
     def get_os_version(self):
         """
         Returns the current OS version.
@@ -1684,9 +2246,18 @@ class EXAConf:
             return self.config["Global"]["OSVersion"]
         else:
             return self.os_version
-#}}}
-    
-#{{{ Get img version
+    # }}}
+    # {{{ Get re version
+    def get_re_version(self):
+        """
+        Returns the current EXARuntime version (introduced in version 6.1.3).
+        """
+        if self.initialized() and "REVersion" in self.config["Global"].scalars:
+            return self.config["Global"]["REVersion"]
+        else:
+            return self.re_version
+    # }}}
+    # {{{ Get img version
     def get_img_version(self):
         """
         Returns the current image version.
@@ -1696,9 +2267,25 @@ class EXAConf:
             return self.config["Global"]["ImageVersion"]
         else:
             return self.img_version
-#}}}
- 
-#{{{ Get cored port
+    # }}}
+    # {{{ Get version
+    def get_version(self):
+        """
+        Returns the version of the EXAConf python module (not the configuration file).
+        """
+        return self.version
+    # }}}
+    # {{{ Get file version
+    def get_file_version(self):
+        """
+        Returns the version of the associated EXAConf file (not the EXAConf python module). If not yet initialized, the python module version is returned instead.
+        """
+        if self.initialized:
+            return self.config["Global"]["ConfVersion"]
+        else:
+            return self.version
+    # }}}
+    # {{{ Get cored port
     def get_cored_port(self):
         """
         Returns the port number used by the 'Cored' daemon.
@@ -1707,9 +2294,8 @@ class EXAConf:
             return self.config["Global"]["CoredPort"]
         else:
             return self.def_cored_port
-#}}}
- 
-#{{{ Get ssh port
+    # }}}
+    # {{{ Get ssh port
     def get_ssh_port(self):
         """
         Returns the port number used by the SSH daemon (introduced in version 6.0.7).
@@ -1718,46 +2304,41 @@ class EXAConf:
             return self.config["Global"]["SSHPort"]
         else:
             return self.def_ssh_port
-#}}}
-   
-#{{{ Get XMLRPC port
+    # }}}
+    # {{{ Get XMLRPC port
     def get_xmlrpc_port(self):
         """
         Returns the port number used by the XMLRPC API.
         """
         if "XMLRPCPort" in self.config["Global"].scalars:
-            return self.config["Global"]["XMLRPCPort"]
+            return int(self.config["Global"]["XMLRPCPort"])
         else:
             return self.def_xmlrpc_port
-#}}}
- 
-#{{{ Get license file
+    # }}}
+    # {{{ Get license file
     def get_license_file(self):
         """
         Returns the path to the license file.
         """
         return self.config["Global"]["LicenseFile"]
-#}}}
-
-#{{{ Get private network name
+    # }}}
+    # {{{ Get private network name
     def get_priv_net_name(self):
         """ 
         Returns the NAME of the private network.
         """
         priv_net_name = self.get_cluster_name() + "_priv"
         return priv_net_name
-#}}}
- 
-#{{{ Get public network name
+    # }}}
+    # {{{ Get public network name
     def get_pub_net_name(self):
         """ 
         Returns the NAME of the public network.
         """
         pub_net_name = self.get_cluster_name() + "_pub"
         return pub_net_name
-#}}}
- 
-#{{{ Get duplicates
+    # }}}
+    # {{{ Get duplicates
     def get_duplicates(self, seq):
         """
         Returns a list off all duplicates in the given sequence.
@@ -1767,9 +2348,8 @@ class EXAConf:
         seen = set()
         seen_twice = set(x for x in seq if x in seen or seen.add(x))
         return list(seen_twice)
-#}}}
-
-#{{{ Get network
+    # }}}
+    # {{{ Get network
     def get_network(self, net_type):
         """ 
         Returns a network (as a string) that includes the private/public IPs of all nodes in the config.
@@ -1801,25 +2381,22 @@ class EXAConf:
                     raise EXAConfError("IP %s is not part of network %s!" % (node_ip, network))
 
         return network
-#}}}
-
-#{{{ Get private network
+    # }}}
+    # {{{ Get private network
     def get_priv_net(self):
         """
         Get a valid IP network containing the private IPs of all nodes (see get_network()).
         """
         return self.get_network("PrivateNet")
-#}}}
-
-#{{{ Get public network
+    # }}}
+    # {{{ Get public network
     def get_pub_net(self):
         """
         Get a valid IP network containing the public IPs of all nodes (see get_network()).
         """
         return self.get_network("PublicNet")
-#}}}
-
-# {{{ Volume exists
+    # }}}
+    # {{{ Volume exists
     def volume_exists(self, name):
         """
         Checks if the given volume exists.
@@ -1830,9 +2407,8 @@ class EXAConf:
                 if str(name) == self.get_section_id(section):
                     return True
         return False                 
-#}}}
- 
-# {{{ Remote volume exists
+    # }}}
+    # {{{ Remote volume exists
     def remote_volume_exists(self, name):
         """
         Checks if the given remote volume exists.
@@ -1843,9 +2419,8 @@ class EXAConf:
                 if str(name) == self.get_section_id(section):
                     return True
         return False                 
-#}}}
-  
-# {{{ Remote volume ID exists
+    # }}}
+    # {{{ Remote volume ID exists
     def remote_volume_id_exists(self, ID):
         """
         Checks if a remote volume with the given ID exists.
@@ -1857,9 +2432,8 @@ class EXAConf:
                 if str(ID) == str(vol_sec['ID']):
                     return True
         return False                 
-#}}}
- 
-# {{{ Database exists
+    # }}}
+    # {{{ Database exists
     def database_exists(self, name):
         """
         Checks if the given database exists.
@@ -1870,9 +2444,8 @@ class EXAConf:
                 if str(name) == self.get_section_id(section):
                     return True
         return False                 
-#}}}
- 
-# {{{ Node id exists
+    # }}}
+    # {{{ Node id exists
     def node_exists(self, nid):
         """
         Returns True if a node with the given ID exists, False otherwise.
@@ -1882,9 +2455,91 @@ class EXAConf:
                 if str(nid) == self.get_section_id(section):
                     return True
         return False                 
-# }}}
- 
-# {{{ Get max node id
+    # }}}
+    # {{{ User exists
+    def user_exists(self, username):
+        """
+        Returns True if a user with the given name exists in EXAConf (or it's a reserved username).
+        """
+        return username in self.get_users() or username in self.reserved_users
+    # }}}
+    # {{{ UID exists
+    def uid_exists(self, uid):
+        """
+        Returns True if a user with the given ID exists in EXAConf (or it's a reserved uid).
+        """
+        for u in self.get_users().values():
+            if u.id == uid:
+                return True
+        for ruid in self.reserved_users.values():
+            if ruid == uid:
+                return True
+        return False
+    # }}}
+    # {{{ User in group
+    def user_in_group(self, user, groups):
+        """
+        Returns True if the given user is in one of the given groups.
+        'user' can be a name or ID. 'groups' can either be a list 
+        of group names or a single group name.
+        """
+        uname = self.to_uname(user)
+        if not isinstance(groups, list):
+            groups = [groups,]
+        uconf = self.get_users()[uname]
+        if uconf.group in groups:
+            return True
+        if "additional_groups" in uconf:
+            for ag in uconf.additional_groups:
+                if ag in groups:
+                    return True
+        return False
+    # }}}
+    # {{{ Group exists
+    def group_exists(self, groupname):
+        """
+        Returns True if a group with the given name exists in EXAConf (or it's a reserved groupname).
+        """
+        return groupname in self.get_groups() or groupname in self.reserved_groups
+    # }}}
+    # {{{ GID exists
+    def gid_exists(self, groupid):
+        """
+        Returns True if a group with the given ID exists in EXAConf.
+        """
+        for g in self.get_groups().values():
+            if g.id == groupid:
+                return True
+        for rgid in self.reserved_groups.values():
+            if rgid == groupid:
+                return True
+        return False
+    # }}}
+    # {{{ bucketfs exists
+    def bucketfs_exists(self, name):
+        """
+        Checks if the given BucketFS exists.
+        """
+        
+        for section in self.config.sections:
+            if self.is_bucketfs(section):
+                if str(name) == self.get_section_id(section):
+                    return True
+        return False                 
+    # }}}
+    # {{{ bucket exists
+    def bucket_exists(self, name, bfs_name):
+        """
+        Checks if the given Bucket exists.
+        """
+        
+        bucketfs_conf = self.get_bucketfs()
+        for bfs in bucketfs_conf.values():
+            if bfs.name == bfs_name:
+                return name in bfs.buckets
+        return False
+    # }}}
+    # {{{ Get max node id
     def get_max_node_id(self):
         """
         Returns the max ID of all existing nodes or 'max_reserved_node_id' if there are none.
@@ -1896,9 +2551,8 @@ class EXAConf:
                 if nid > max_nid:
                     max_nid = nid
         return max_nid
-# }}}
-
-# {{{ Get max remote volume id
+    # }}}
+    # {{{ Get max remote volume id
     def get_max_remote_volume_id(self):
         """
         Returns the max ID of all existing remote volumes or 'remote_vol_id_offset' if there are none.
@@ -1911,9 +2565,8 @@ class EXAConf:
                 if vid > max_vid:
                     max_vid = vid
         return max_vid
-# }}}
- 
-# {{{ Get def bg rec limit
+    # }}}
+    # {{{ Get def bg rec limit
     def get_def_bg_rec_limit(self):
         """
         Returns the default background recovery throughput limit (in MiB/s), depending on the network speed.
@@ -1922,8 +2575,7 @@ class EXAConf:
         #FIXME : actually use netwoork speed (as soon as available)
         return self.def_bg_rec_limit_1gb
     # }}}
- 
-#{{{ Get nodes 
+    # {{{ Get nodes 
     def get_nodes(self):
         """ 
         Returns a config containing all nodes and their options within the config file.
@@ -1938,10 +2590,10 @@ class EXAConf:
                 node_conf.id = nid
                 node_conf.name = node_sec["Name"]
                 if node_sec["PrivateNet"].strip() != "":
-                    node_conf.private_net = self.get_net_str(node_sec["PrivateNet"])
+                    node_conf.private_net = self.to_net_str(node_sec["PrivateNet"], nid)
                     node_conf.private_ip = node_conf.private_net.split("/")[0]
                 if node_sec["PublicNet"].strip() != "":
-                    node_conf.public_net = self.get_net_str(node_sec["PublicNet"])
+                    node_conf.public_net = self.to_net_str(node_sec["PublicNet"], nid)
                     node_conf.public_ip = node_conf.public_net.split("/")[0]
                 node_conf.uuid = node_sec["UUID"]
                 # storage disks
@@ -1956,6 +2608,7 @@ class EXAConf:
                             disk_conf.component = disk_sec["Component"]
                         else:
                             disk_conf.component = self.def_disk_component
+                        disk_conf.devices = []
                         if "Devices" in disk_sec.scalars:
                             disk_conf.devices = [ dev.strip() for dev in disk_sec["Devices"].split(",") if dev.strip() != "" ]
                         if "Drives" in disk_sec.scalars:
@@ -1981,24 +2634,30 @@ class EXAConf:
                 if "ExposedPorts" in node_sec.scalars:
                     node_conf.exposed_ports =  [ p.split(":") for p in node_sec["ExposedPorts"].split(",") ]
                     node_conf.exposed_ports[:] = [ (int(p[0].strip()), int(p[1].strip())) for p in node_conf.exposed_ports ]
-                if "PrivateInterface" in node_sec.scalars:
-                    node_conf.private_interface = node_sec["PrivateInterface"]
-                if "PublicInterface" in node_sec.scalars:
-                    node_conf.public_interface = node_sec["PublicInterface"]
 
                 node_configs[nid] = node_conf
         return node_configs
-#}}}
-
-#{{{ Get num nodes
+    # }}}
+    # {{{ Get node config
+    def get_node_config(self, node_id):
+        return self.get_nodes().get(str(node_id))
+    # }}}
+    # {{{ Get node device list
+    def get_node_device_list(self, node_id):
+        node_conf = self.get_node_config(node_id)
+        device_list = []
+        for (_, disk_conf) in node_conf.disks.items():
+            device_list += disk_conf.devices
+        return device_list
+    # }}}
+    # {{{ Get num nodes
     def get_num_nodes(self):
         """
         Returns the nr. of nodes in the current EXAConf.
         """
         return len([sec for sec in self.config.sections if self.is_node(sec)])
-#}}}
-
-#{{{ Get storage conf
+    # }}}
+    # {{{ Get storage conf
     def get_storage_conf(self):
         """
         Returns the various configurable EXAStorage parameters.
@@ -2014,9 +2673,8 @@ class EXAConf:
         if "SpaceWarnThreshold" in storage_sec.scalars and storage_sec["SpaceWarnThreshold"].strip() != "":
             storage_conf.space_warn_threshold = int(storage_sec["SpaceWarnThreshold"])
         return storage_conf
-#}}}
-
-#{{{ Get volumes
+    # }}}
+    # {{{ Get volumes
     def get_volumes(self, filters=None):
         """
         Returns configurations describing all existing EXAStorage volumes.
@@ -2032,17 +2690,18 @@ class EXAConf:
                 conf.type = vol_sec["Type"].strip()
                 # data or archive volume
                 if conf.type == "data" or conf.type == "archive":
-                    conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else -1
+                    conf.size = units2bytes(vol_sec["Size"]) if vol_sec["Size"].strip() != "" else 0
                     conf.disk = vol_sec["Disk"].strip() if vol_sec["Disk"].strip() != "" else None
                     conf.redundancy = vol_sec.as_int("Redundancy")
                     conf.owner = tuple([ int(x.strip()) for x in vol_sec["Owner"].split(":") if x.strip() != "" ])
                     conf.nodes = [ int(n.strip()) for n in vol_sec["Nodes"].split(",") if n.strip() != "" ]
                     # optional values
                     conf.permissions = vol_sec["Permissions"] if "Permissions" in vol_sec.scalars else self.def_vol_perm
-                    conf.num_master_nodes = vol_sec["NumMasterNodes"] if "NumMasterNodes" in vol_sec.scalars else len(conf.nodes)
+                    conf.num_master_nodes = int(vol_sec["NumMasterNodes"]) if "NumMasterNodes" in vol_sec.scalars else len(conf.nodes)
                     conf.priority = int(vol_sec["Priority"]) if "Priority" in vol_sec.scalars else self.def_vol_prio
                     conf.shared = vol_sec.as_bool("Shared") if "Shared" in vol_sec.scalars else self.def_vol_shared
-                    conf.labels = [ l.strip() for l in vol_sec["Labels"].split(",") if l.strip() != "" ] if "Labels" in vol_sec.scalars else None
+                    if "Labels" in vol_sec.scalars:
+                        conf.labels = [ l.strip() for l in vol_sec["Labels"].split(",") if l.strip() != "" ]
                     # HIDDEN optional values:
                     if "BlockSize" in vol_sec.scalars:
                         conf.block_size = units2bytes(vol_sec["BlockSize"])
@@ -2064,9 +2723,8 @@ class EXAConf:
                             raise EXAConfError("Found invalid volume type '%s'!" % conf.type)
                 volume_configs[vol_name] = conf
         return self.filter_configs(volume_configs, filters)
-#}}}
-
-#{{{ Get remote volumes
+    # }}}
+    # {{{ Get remote volumes
     def get_remote_volumes(self, filters=None):
         """
         Returns configurations describing all existing remote volumes (SMB, S3, etc.)
@@ -2080,15 +2738,16 @@ class EXAConf:
                 conf = config()
                 conf.name = vol_name
                 conf.type = vol_sec["Type"].strip()
+                conf.vid = vol_sec["ID"].strip()
                 conf.url = vol_sec["URL"].strip()
                 conf.username = vol_sec["Username"].strip()
-                conf.password = vol_sec["Password"].strip()
+                conf.passwd = vol_sec["Passwd"].strip()
                 conf.options = vol_sec["Options"].strip()
+                conf.owner = tuple([ int(x.strip()) for x in vol_sec["Owner"].split(":") if x.strip() != "" ])
                 volume_configs[vol_name] = conf
         return self.filter_configs(volume_configs, filters)
-#}}}
- 
-#{{{ Get databases
+    # }}}
+    # {{{ Get databases
     def get_databases(self, filters=None):
         """
         Returns a config describing all existing EXASolution databases.
@@ -2145,9 +2804,8 @@ class EXAConf:
                 # add current database    
                 db_configs[db_name] = conf
         return self.filter_configs(db_configs, filters)
-#}}}
-          
-# {{{ Get node usage
+    # }}}
+    # {{{ Get node usage
     def get_node_usage(self, nid):
         """
         Returns a dict containing all volumes and / or DBs that the given node is part of ('None' otherwise).
@@ -2171,9 +2829,8 @@ class EXAConf:
             return None
         else:
             return result
-# }}}
-           
-# {{{ Get volume usage
+    # }}}
+    # {{{ Get volume usage
     def get_volume_usage(self, vname):
         """
         Returns a list containing all DBs that are using the given volume (includes 'EXA' and remote volumes).
@@ -2189,21 +2846,19 @@ class EXAConf:
             return None
         else:
             return result
-# }}}
- 
-#{{{ Get bucketfs conf
-    def get_bucketfs_conf(self):
+    # }}}
+    # {{{ Get bucketfs
+    def get_bucketfs(self):
         """
-        Returns a config containing global options and config objects for all bucket filesystem and their buckets in 'fs'.
+        Returns a config containing entries for all bucket filesystems and their buckets.
         """
         bfs_config = config()
-        bfs_config.service_owner = tuple([ int(x.strip()) for x in self.config["BucketFS"]["ServiceOwner"].split(":") if x.strip() != "" ])
-        bfs_config.fs = config()
         for section in self.config.sections:
             if self.is_bucketfs(section):
                 bfs_sec = self.config[section]
                 bfs_conf = config()
-                bfs_conf.bfs_name = self.get_section_id(section)
+                bfs_conf.name = self.get_section_id(section)
+                bfs_conf.owner = tuple([ int(x.strip()) for x in bfs_sec["Owner"].split(":") if x.strip() != "" ])
                 bfs_conf.http_port = bfs_sec.as_int("HttpPort")
                 bfs_conf.https_port = bfs_sec.as_int("HttpsPort")
                 bfs_conf.sync_key = bfs_sec["SyncKey"]
@@ -2217,20 +2872,17 @@ class EXAConf:
                     if self.is_bucket(subsec):
                         b_sec = bfs_sec[subsec]
                         b_conf = config()
-                        b_conf.id = self.get_section_id(subsec)
+                        b_conf.name = self.get_section_id(subsec)
                         b_conf.read_passwd = b_sec["ReadPasswd"]
                         b_conf.write_passwd = b_sec["WritePasswd"]
                         b_conf.public = b_sec.as_bool("Public")
                         if "AdditionalFiles" in b_sec.scalars:
                             b_conf.additional_files = [ f.strip() for f in b_sec["AdditionalFiles"].split(",") if f.strip() != "" ]
-                        if "Name" in b_sec.scalars:
-                            b_conf.name = b_sec["Name"]
-                        bfs_conf.buckets[b_conf.id] = b_conf
-                bfs_config.fs[bfs_conf.bfs_name] = bfs_conf
+                        bfs_conf.buckets[b_conf.name] = b_conf
+                bfs_config[bfs_conf.name] = bfs_conf
         return bfs_config
-#}}}
-
-#{{{ Get ssl conf
+    # }}}
+    # {{{ Get ssl conf
     def get_ssl_conf(self):
         """
         Returns the SSL configuration.
@@ -2243,9 +2895,8 @@ class EXAConf:
         ssl_config.cert_key = ssl_sec["CertKey"]
         ssl_config.cert_auth = ssl_sec["CertAuth"]
         return ssl_config
-#}}}
-
-#{{{Get nameservers
+    # }}}
+    # {{{ Get nameservers
     def get_nameservers(self):
         """
         Returns the list of nameservers or an empty list, if there are none.
@@ -2254,43 +2905,213 @@ class EXAConf:
         if "NameServers" in self.config["Global"]:
             res = [ x.strip() for x in self.config["Global"]["NameServers"].split(",") if x.strip() != "" ]
         return res
-#}}}
-
-#{{{ Get os dir
+    # }}}
+    # {{{ Get os dir
     def get_os_dir(self):
         """
         Returns the absolute path to EXAClusterOS (with the same version number as the EXAConf).
         """
         return self.os_dir
-#}}}
- 
-#{{{ Get db dir
-    def get_db_dir(self):
+    # }}}
+    # {{{ Get db dir
+    def get_db_dir(self, version = None):
         """
         Returns the absolute path to EXASolution (with the same version number as the EXAConf).
+        If version is specified (e.g. '6.1.1') then it returns the path where a DB with that
+        version should be installed.
         """
-        return self.db_dir
-#}}}
- 
-#{{{ Get user remote volumes file
+        if version is None:
+            return self.db_dir
+        else:
+            db_major = version.split(".")[0].strip()
+            return "/usr/opt/EXASuite-" + db_major + \
+                   "/EXASolution-" + version
+    # }}}
+    # {{{ Get init cmd
+    def get_init_cmd(self):
+        """
+        Returns the path to the init binary and the arguments to the command as a tuple (to be used with 'os.execv').
+        """
+        # build init command
+        init_cmd = os.path.join(self.re_dir, "bin/numactl")
+        init_args = ["--interleave=all", os.path.join(self.os_dir, "libexec/exainit.py")] 
+        return (init_cmd, init_args)
+    # }}}
+    # {{{ Get user remote volumes file
     def get_user_remote_volumes_file(self, user):
         """
         Returns the absolute path to the given user's remote volume configuration file.
         """
         cf = os.path.join(self.container_root, self.conf_remote_volumes_dir, 
-                          to_uname(user) + "." + str(to_uid(user)) + ".conf")
+                          self.to_uname(user) + "." + str(self.to_uid(user)) + ".conf")
         return cf
-#}}}
-
-#{{{ Get gui dir
+    # }}}
+    # {{{ Get gui dir
     def get_gui_dir(self):
         """
         Returns the full path to the directory containing the GUI files (aka. the "GUI web root").
         """
         return os.path.join(self.get_os_dir(), self.def_gui_subdir)
-#}}}
+    # }}}
+    # {{{ Get device type
+    def get_device_type(self):
+        """
+        Returns the device-type used for this cluster. The return value depends on the actual platform.
+        """
+        if self.platform_is("Docker"):
+            return self.config["Docker"]["DeviceType"]
+        else:
+            return self.def_device_type
+    # }}}
+    # {{{ Get users
+    def get_users(self, filters=None):
+        """
+        Returns a config containing all users defined in EXAConf.
+        """
+        user_configs = config()
+        if "Users" in self.config.sections:
+            for user in self.config["Users"].sections:
+                user_sec = self.config["Users"][user]
+                user_conf = config()  
+                user_conf.group = user_sec["Group"]
+                user_conf.id = user_sec.as_int("ID")
+                user_conf.login_enabled = user_sec.as_bool("LoginEnabled")
+                if "Passwd" in user_sec.scalars:
+                    user_conf.passwd = user_sec["Passwd"]
+                if "AdditionalGroups" in user_sec.scalars:
+                    user_conf.additional_groups = [ g.strip() for g in user_sec["AdditionalGroups"].split(',') if g.strip() != "" ]
+                if "AuthorizedKeys" in user_sec.scalars:
+                    user_conf.authorized_keys = [ k.strip() for k in user_sec["AuthorizedKeys"].split(',') if k.strip() != "" ]
+                user_configs[user] = user_conf
+        return self.filter_configs(user_configs, filters)
+    # }}}
+    # {{{ Get groups
+    def get_groups(self, filters=None):
+        """
+        Returns a config containing all groups defined in EXAConf.
+        """
+        group_configs = config()
+        if "Groups" in self.config.sections:
+            for group in self.config["Groups"].sections:
+                group_sec = self.config["Groups"][group]
+                group_conf = config()
+                group_conf.id = group_sec.as_int("ID")
+                group_configs[group] = group_conf
+        return self.filter_configs(group_configs, filters)
+    # }}}
+    # {{{ To uid
+    def to_uid(self, uname):
+        """
+        Returns the user ID of the given username. If it's already an ID, it either returns it directly 
+        or converts it to an int if it's a string.
+        """
+        uid = None
+        # is it a string?
+        if is_str(uname):
+            # does the string contain a UID?
+            # YES -> convert to int
+            try:
+                uid = int(uname)
+            # NO -> convert to UID
+            except ValueError:
+                users = self.get_users()
+                if uname in users:
+                    uid = users[uname].id
+        # NO -> it's already a valid uid, do nothing
+        else:
+            uid = uname
 
-#{{{ Filter configs
+        if uid is None:
+            raise EXAConfError("User '%s' does not exist in EXAConf!" % uname)
+        return uid
+    # }}}
+    # {{{ To uname
+    def to_uname(self, uid):
+        """
+        Returns the username of the given user ID. ID can be an int or a string. If ID is already a username, returns it unmodified.
+        """
+        uname = None
+        # is it a string?
+        if is_str(uid):
+            # does the string contain a UID?
+            # YES -> convert to int and then to username
+            try:
+                uid = int(uid)
+                users = self.get_users()
+                for u in users.items():
+                    if u[1].id == uid:
+                        uname = u[0]
+            # NO -> it's already a valid username, do nothing
+            except ValueError:
+                uname = uid
+        # NO -> convert uid to username
+        else:
+            users = self.get_users()
+            for u in users.items():
+                if u[1].id == uid:
+                    uname = u[0]
+
+        if uname is None:
+            raise EXAConfError("User with ID %i does not exist in EXAConf!" % int(uid))
+        return uname
+    # }}}
+    # {{{ To gid
+    def to_gid(self, gname):
+        """
+        Returns the group ID of the given groupname. If it's already an ID, it either returns it directly 
+        or converts it to an int if it's a string.
+        """
+        gid = None
+        # is it a string?
+        if is_str(gname):
+            # does the string contain a GID?
+            # YES -> convert to int
+            try:
+                gid = int(gname)
+            # NO -> convert to GID
+            except ValueError:
+                groups = self.get_groups()
+                if gname in groups:
+                    gid = groups[gname].id
+        # NO -> it's already a valid gid, do nothing
+        else:
+            gid = gname
+
+        if gid is None:
+            raise EXAConfError("group '%s' does not exist in EXAConf!" % gname)
+        return gid
+    # }}}
+    # {{{ To gname
+    def to_gname(self, gid):
+        """
+        Returns the name of the given group ID. ID can be an int or a string. If ID is already a groupname, returns it unmodified.
+        """
+        gname = None
+        # is it a string?
+        if is_str(gid):
+            # does the string contain a GID?
+            # YES -> convert to int and then to username
+            try:
+                gid = int(gid)
+                groups = self.get_groups()
+                for g in groups.items():
+                    if g[1].id == gid:
+                        gname = g[0]
+            # NO -> it's already a valid username, do nothing
+            except ValueError:
+                gname = gid
+        # NO -> convert gid to groupname
+        else:
+            groups = self.get_groups()
+            for g in groups.items():
+                if g[1].id == gid:
+                    gname = g[0]
+
+        if gname is None:
+            raise EXAConfError("Group with ID %i does not exist in EXAConf!" % int(gid))
+        return gname
+    # }}}
+    # {{{ Filter configs
     def filter_configs(self, configs, filters):
         """
         Applies the given filters (a dict) to the given config object by removing all items that
@@ -2305,11 +3126,11 @@ class EXAConf:
                     del configs[item[0]]
                     break
         return configs
-#}}}
-
-################### SIMPLE API (dedicated functions for selected actions) ##############
+    # }}}
+    
+    ################### SIMPLE API (dedicated functions for selected actions) ##############
   
-#{{{ Add node disk
+    # {{{ Add node disk
     def add_node_disk(self, node_id, disk, component = None, devices = None, drives = None,
                       overwrite_existing = False):
         """
@@ -2342,9 +3163,8 @@ class EXAConf:
         node_conf.disks[disk] = disk_entry
         
         self.set_node_conf(node_conf, node_conf.id)
-#}}}
-
-#{{{ Remove node disk
+    # }}}
+    # {{{ Remove node disk
     def remove_node_disk(self, node_id, disk):
         """ 
         Removes the given storage disk (or all disks) from the given node.
@@ -2363,9 +3183,8 @@ class EXAConf:
                         del node_conf.disks[d.name]
 
         self.set_node_conf(node_conf, node_conf.id, remove_disks=True)
-#}}}
-   
-#{{{ Add node device
+    # }}}
+    # {{{ Add node device
     def add_node_device(self, node_id, disk, device, path = None):
         """ 
         Adds the given device to the given disk on the given node. If 'path' is specified, a mapping is also added. 
@@ -2392,9 +3211,8 @@ class EXAConf:
             node_disks[disk].mapping.append((device,path))
         
         self.set_node_conf(node_conf, node_conf.id)
-#}}}
-
-#{{{ Remove node device
+    # }}}
+    # {{{ Remove node device
     def remove_node_device(self, node_id, disk, device, remove_empty_disk=True):
         """
         Removes the given device from the node and disk. Also deletes the disk
@@ -2426,9 +3244,32 @@ class EXAConf:
             del node_disks[disk]
         
         self.set_node_conf(node_conf, node_conf.id, remove_disks = remove_empty_disk)
-#}}}
- 
-#{{{ Use disk for volumes
+    # }}}
+    # {{{ Remove node drives
+    def remove_node_drives(self, node_id, disk, drives_to_remove):
+        """
+        Removes given drives from the disk.
+        """
+        assert type(drives_to_remove) is list
+        
+        nodes_conf = self.get_nodes()
+        if str(node_id) not in nodes_conf.keys():
+            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
+        node_conf = nodes_conf[str(node_id)]
+        if "disks" not in node_conf.keys():
+            raise EXAConfError("Node %s does not have any disks." % node_id)
+        if disk not in node_conf.disks:
+            raise EXAConfError('Node {} does not have disk {}'.format(node_id, disk.full()))
+
+        disk_conf = node_conf.disks[disk]
+        disk_conf.drives = [ d for d in disk_conf.drives if d not in drives_to_remove ]
+
+        if not disk_conf.drives:
+            del disk_conf["drives"]
+        
+        self.set_node_conf(node_conf, node_conf.id)
+    # }}}
+    # {{{ Use disk for volumes
     def use_disk_for_volumes(self, disk, bytes_per_node, vol_type=None, min_vol_size = None, vol_resize_step=None):
         """
         Adds the given disk to all volumes of the given type that don't have a disk assigned yet.         
@@ -2458,44 +3299,41 @@ class EXAConf:
             vol_sec["Size"] = vol_size
 
         self.commit()
-#}}}
-
-#{{{ Set node network
+    # }}}
+    # {{{ Set node network
     def set_node_network(self, node_id, private=None, public=None):
         """
         Sets the private and / or public network of the given node. 
         """
 
-        # TODO : use 'set_node_conf()'
+        nodes = self.get_nodes()
+        if node_id not in nodes:
+            raise EXAConfError("Node %s does not exist in '%s'!" % (str(node_id), self.conf_path))
 
-        node_sec_name = "Node : " + str(node_id)
-        if node_sec_name not in self.config.sections:
-            raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
-        node_sec = self.config[node_sec_name]
+        node_conf = nodes[str(node_id)]
 
         if private and private != "":
-            if not self.net_is_valid(private):
-                raise EXAConfError("Private network '%s' is invalid!" % private)
-            node_sec["PrivateNet"] = private
+            node_conf.private_net = private
+            if 'private_ip' in node_conf:
+                del node_conf.private_ip #delete old IP
         if public and public != "":
-            if not self.net_is_valid(public):
-                raise EXAConfError("Public network '%s' is invalid!" % public)
-            node_sec["PublicNet"] = public
+            node_conf.public_net = public
+            if 'public_ip' in node_conf:
+                del node_conf.public_ip #delete old IP
 
-        self.commit()
-#}}}
- 
-##############################  DOCKER EXCLUSIVE STUFF ##################################
+        self.set_node_conf(node_conf, node_id)
+    # }}}
+     
+    ##############################  DOCKER EXCLUSIVE STUFF ##################################
 
-#{{{ Get docker image
+    # {{{ Get docker image
     def get_docker_image(self):
         """
         Returns the name of the docker image used for this cluster.
         """
         return self.config["Docker"]["Image"]
-#}}}
-
-#{{{ Update docker image
+    # }}}
+    # {{{ Update docker image
     def update_docker_image(self, image):
         """
         Replaces the docker image for all containers of this cluster with the given one. 
@@ -2504,25 +3342,15 @@ class EXAConf:
         """
         self.config["Docker"]["Image"] = image
         self.commit()
-#}}}
-
-#{{{ Get docker device type
-    def get_docker_device_type(self):
-        """
-        Returns the device-type used for this cluster (file | block).
-        """
-        return self.config["Docker"]["DeviceType"]
-#}}}
-
-#{{{ Get docker root directory
+    # }}}
+    # {{{ Get docker root directory
     def get_docker_root_dir(self):
         """
         Returns the docker root-directory of this cluster.
         """
         return self.config["Docker"]["RootDir"]
-#}}}
-
-#{{{ Get docker node volumes
+    # }}}
+    # {{{ Get docker node volumes
     def get_docker_node_volumes(self):
         """ 
         Returns a config containing the absolute path to the docker-volume of all nodes. 
@@ -2533,15 +3361,14 @@ class EXAConf:
             if self.is_node(section):
                 node_volumes[self.get_section_id(section)] = os.path.join(self.root, self.config[section]["DockerVolume"])
         return node_volumes
-#}}}
- 
-#{{{ Get docker conf
+    # }}}
+    # {{{ Get docker conf
     def get_docker_conf(self):
         """ 
         Returns a config object containing all entries from the 'Docker' section. 
         """
 
-        if self.get_platform() != "Docker":
+        if not self.platform_is("Docker"):
             raise EXAConfError("This function is only supported for the 'Docker' platform!")
         conf = config()
         docker_sec = self.config["Docker"]
@@ -2573,12 +3400,32 @@ class EXAConf:
             conf.additional_volumes = [v.strip() for v in docker_sec["AdditionalVolumes"].split(",") if v.strip() != ""]
         else:
             conf.additional_volumes = []
+        if "IpcMode" in docker_sec.scalars and docker_sec["IpcMode"] != "":
+            conf.ipc_mode = docker_sec["IpcMode"]
+        else:
+            conf.ipc_mode = self.def_docker_ipc_mode
         return conf
-#}}}
+    # }}}
+    # {{{ Set docker privileged
+    def set_docker_privileged(self, enabled):
+        """
+        Set the flag for privileged mode to 'True' or 'False'. Can be used to signal that a container has been
+        started without privileged mode. May raise exceptions if the current configuration is not supported in 
+        unprivileged containers (e. g. device-type 'block').
+        """
+        if not self.platform_is("Docker"):
+            raise EXAConfError("This function is only supported for the 'Docker' platform!")
+        self.config["Docker"]["Privileged"] = str(enabled)
+        # sanity checks
+        if enabled is False:
+            if self.get_device_type() != "file":
+                raise EXAConfError("Only device-type 'file' is supported in unprivileged Docker containers (current mode is '%s')!" % self.get_device_type())
+        self.commit()
+    # }}}
 
-############################# UTILITY FUNCTIONS #################################
+    ############################# UTILITY FUNCTIONS #################################
 
-# {{{ Check fix local dev path
+    # {{{ Check fix local dev path
     def check_fix_local_dev_path(self, dev_file):
         """
         Compatibility function: checks if the given device has a meta file (old format)
@@ -2598,4 +3445,4 @@ class EXAConf:
                     raise EXAConfError("Could not find device file '%s'!" % dev_file)
         except Exception as e:
             raise EXAConfError("Failed to check device file '%s': %s" % (dev_file, e))
-# }}}
+    # }}}

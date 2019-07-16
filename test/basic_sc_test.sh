@@ -1,8 +1,10 @@
 #! /bin/bash
  
 DOCKER="$(which docker)"
+VM_HOME="/test_framwork"
 VOLUME="exa_basic_sc_test_volume"
-IMAGE="exasol/docker-db-dev:latest"
+IMAGE="exasol/docker-db:latest"
+DO_PULL="true"
   
 usage() {
     echo "Usage: $0 [-i IMAGE] [-D DOCKER CMD]"
@@ -21,7 +23,7 @@ die() {
 }
  
 # parse parameters
-while getopts "i:D:h" opt; do
+while getopts "i:D:Ph" opt; do
     case "$opt" in
         i)
             IMAGE="$OPTARG"
@@ -30,6 +32,10 @@ while getopts "i:D:h" opt; do
         D)
             DOCKER="$OPTARG"
             log "INFO:: Using Docker command '$DOCKER'."
+            ;;
+        P)
+            DO_PULL="false"
+            log "INFO:: Not pulling the Docker image."
             ;;
         h)
             usage
@@ -43,51 +49,86 @@ while getopts "i:D:h" opt; do
 done
  
 wait_start() {
-    echo -n "Waiting for container $1 to start... "
-    while [[ -z $(docker logs "$1" 2>&1 | grep -e ".*Started.*exasql .*") ]]
+    SEC_WAIT=120
+    SEC_DONE=0
+    log "Waiting $SEC_WAIT seconds for container $1 to start... "
+    while true 
     do
-        sleep 3
+        if [[ $SEC_DONE -lt $SEC_WAIT ]]; then
+            if [[ $(docker logs "$1" 2>&1 | grep -e ".*Started.*exasql .*") ]]; then
+                log "successful!"
+                return 0
+            else
+                sleep 1
+                SEC_DONE=$((SEC_DONE+1))
+            fi
+        else
+            log "ERROR: timed out. Collecting container logs:"
+            "$DOCKER" logs "$1" 2>&1
+            return 1
+        fi
     done
-    echo "successful!"
-    return 0
 }
-
-"$DOCKER" pull "$IMAGE" # does not work with local built dev-images
+ 
+if [[ "$DO_PULL" == "true" ]]; then
+    $DOCKER pull "$IMAGE" #does not work with locally built dev-images
+fi
 set -e
 log "=== Starting self-contained basic test ==="
-log "Creating container without a persistent volume"
+log "= PART 1 : Creating container without a persistent volume ="
 CONTAINER=$("$DOCKER" run --detach --privileged "$IMAGE") &&
 wait_start "$CONTAINER" 
-echo "Testing exaplus functionality"
+log "Testing exaplus functionality"
 "$DOCKER" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
-echo "Creating a file within the container"
+log "Creating a file within the container"
 "$DOCKER" exec "$CONTAINER" touch /exa/my_file
-echo "Stopping the container"
+log "Stopping the container"
 "$DOCKER" stop -t 60 "$CONTAINER"
-echo "Restarting the container"
+log "Restarting the container"
 "$DOCKER" start "$CONTAINER"
 wait_start "$CONTAINER"
-echo -n "Checking if the file still exists... "
+log "Checking if the file still exists... "
 if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
-    echo "File-check failed!"
-    exit 1
-else
-    echo "successful!"
+    die "File-check failed!"
 fi
-echo "Stopping and deleting the container"
+log "Stopping and deleting the container"
 "$DOCKER" stop "$CONTAINER"
 "$DOCKER" rm "$CONTAINER"
-log "Creating a new container with a persistent volume"
+
+log "= PART 2 : Creating a new container with a persistent volume ="
 if [[ ! -z $("$DOCKER" volume ls | grep "$VOLUME") ]]; then
     "$DOCKER" volume rm "$VOLUME"
 fi
 CONTAINER=$("$DOCKER" run --detach --privileged -v $VOLUME:/exa "$IMAGE") &&
 wait_start "$CONTAINER" 
-
-#TODO : test db persistency with exaplus (also DELETE the container before restarting it)
-
-echo "Stopping and deleting the container"
+log "Testing exaplus functionality"
+"$DOCKER" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
+log "Creating a file within the container"
+"$DOCKER" exec "$CONTAINER" touch /exa/my_file
+log "Stopping the container"
+"$DOCKER" stop -t 60 "$CONTAINER"
+log "Restarting the container"
+"$DOCKER" start "$CONTAINER"
+wait_start "$CONTAINER"
+log "Checking if the file still exists... "
+if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
+    die "File-check failed!"
+fi 
+log "Stopping and deleting the container"
 "$DOCKER" stop "$CONTAINER"
 "$DOCKER" rm "$CONTAINER"
+log "Creating a new container with the same volume"
+CONTAINER=$("$DOCKER" run --detach --privileged -v $VOLUME:/exa "$IMAGE") &&
+wait_start "$CONTAINER" 
+log "Checking if the file still exists... "
+if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
+    die "File-check failed!"
+fi 
+log "Testing exaplus functionality"
+"$DOCKER" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
+log "Stopping and deleting the container"
+"$DOCKER" stop "$CONTAINER"
+"$DOCKER" rm "$CONTAINER"
+log "Deleting the persistent volume"
 "$DOCKER" volume rm "$VOLUME"
 log "=== Successful! ==="
