@@ -8,8 +8,8 @@ from libexadt.EXAConf import config
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
-my_version = "6.1.4"
-exaconf="/usr/opt/EXASuite-6/EXAClusterOS-6.1.4/bin/exaconf"
+my_version = "6.1.5"
+exaconf="/usr/opt/EXASuite-6/EXAClusterOS-6.1.5/bin/exaconf"
 info_arc_prefix = "exasol_docker_info"
 confirm_yes = False
 quiet_output = False
@@ -461,20 +461,26 @@ def init_sc(cmd):
         else:
             log_err("exadt::ERROR: can't find node ID '%s' in EXAConf." % cmd.node_id)
             sys.exit(1)
+
+    # 8. set root password if requested
+    if cmd.root_passwd:
+        root_conf = exaconf.get_users()['root']
+        root_conf.passwd = cmd.root_passwd
+        exaconf.set_user_conf(root_conf, 'root', encode_passwd = cmd.encode_passwd)
   
-    # 8. set and export hostname
+    # 9. set and export hostname
     hostname = "n" + str(cmd.node_id)
     log_msg("exadt:: setting hostname to '%s'" % hostname)
     os.environ['EXA_NODE_ID'] = str(cmd.node_id)
     os.environ['HOSTNAME'] = hostname
     subprocess.call(['/bin/hostname', hostname])
 
-    # 9. remove authentication socket if it exists
+    # 10. remove authentication socket if it exists
     if os.path.exists(cos_auth_socket) and os.getpid() == 1:
         log_msg("exadt:: removing '%s'" % cos_auth_socket)
         os.remove(cos_auth_socket)        
        
-    # 10. create storage devices and set initial ownership if this is the FIRST start
+    # 11. create storage devices and set initial ownership if this is the FIRST start
     # --> skip file-creation in 'template' mode bt change ownership so the
     #     files can be modified by the user
     #     NOTE : changing ownership later may break permission management if
@@ -499,7 +505,7 @@ def init_sc(cmd):
             for f in files:
                 os.lchown(os.path.join(root, f), sc_user, sc_group)
    
-    # 11. call exainit
+    # 12. call exainit
     # --> or exit if requested
     if cmd.template:
         if cmd.print_conf: 
@@ -1245,51 +1251,61 @@ def main():
     # init-sc command
     parser_isc = cmdparser.add_parser(
             'init-sc',
-            help='Initialize the container of a self-contained image') 
+            help='Initialize the container of a self-contained image.') 
     parser_isc.add_argument(
             '--template', '-t',
             default = False,
             action = 'store_true',
-            help="Create an EXAConf template and exit (also prepares '/exa')")
+            help="Create an EXAConf template and exit (also prepares '/exa').")
     parser_isc.add_argument(
             '--print-conf', '-p',
             default = False,
             action = 'store_true',
-            help="Print the EXAConf to stdout (in template mode)")
+            help='Print the EXAConf to stdout (in template mode).')
     parser_isc.add_argument(
             '--node-id', '-i',
             type = str,
             default = '11',
-            help='Node ID of the current container')
+            help='Node ID of the current container.')
     parser_isc.add_argument(
             '--num-nodes', '-n',
             type = int,
             default = 1,
-            help='Number of cluster nodes')
+            help='Number of cluster nodes.')
+    parser_isc.add_argument(
+            '--root-passwd', '-r',
+            type = str,
+            required = False,
+            help="Password for user root (add '-e' if not encoded).")
+    parser_isc.add_argument(
+            '--encode-passwd', '-e',
+            action='store_true',
+            required = False,
+            help = "Encode the given cleartext password as a SHA512 hash value (like in /etc/shadow).")
     parser_isc.add_argument(
             '--img-version', '-I',
             type = str,
-            help='Version number of the new Docker image')
+            help='Version number of the new Docker image.')
     parser_isc.add_argument(
             '--db-version', '-D',
             type = str,
-            help='DB version number')
+            help='DB version number.')
     parser_isc.add_argument(
             '--os-version', '-O',
             type = str,
-            help='EXAClusterOS version number')
+            help='EXAClusterOS version number.')
     parser_isc.add_argument(
             '--re-version', '-R',
             type = str,
-            help='EXARuntime version number')
+            help='EXARuntime version number.')
     parser_isc.add_argument(
             '--user', '-u',
             type = int,
-            help='User ID that should own the generated files (default: %i)' % sc_user)
+            help='User ID that should own the generated files (default: %i).' % sc_user)
     parser_isc.add_argument(
             '--group', '-g',
             type = int,
-            help='Group ID that should own the generated files (default: %i)' % sc_group)
+            help='Group ID that should own the generated files (default: %i).' % sc_group)
     parser_isc.set_defaults(func=init_sc)
 
     # list clusters command

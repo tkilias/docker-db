@@ -653,7 +653,12 @@ class docker_handler:
         # 6. wait for containers to stop
         if wait is True:
             for c in containers:
-                self.client.wait(c, timeout=wait_timeout)
+                try:
+                    self.client.wait(c, timeout=wait_timeout)
+                # 'NotFound' can be raised if the container has already been
+                # removed (because of the 'auto_remove' flag)
+                except docker.errors.NotFound:
+                    pass
 #}}}
 
 #{{{ Stop cluster

@@ -3,12 +3,12 @@
 import sys, os, stat, ipaddr, configobj, StringIO, hashlib, re
 from collections import OrderedDict as odict
 try:
-    from util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd
-    units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd #silence pyflakes
+    from util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded
+    units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded #silence pyflakes
     from py_compat import is_str
     is_str
 except ImportError:
-    from libconfd.common.util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd
+    from libconfd.common.util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded
     from libconfd.common.py_compat import is_str
 
 # {{{ Class EXAConfError
@@ -195,8 +195,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.1.4"
-        self.re_version = "6.1.4"
+        self.version = "6.1.5"
+        self.re_version = "6.1.5"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -372,6 +372,13 @@ class EXAConf:
                             bfs_sec["Owner"] = bfs_owner
                     # delete old global section
                     del self.config["BucketFS"]
+            # 6.1.5 Rename 'NumMasterNodes' to 'NumActiveNodes' in DB section
+            if self.compare_versions("6.1.5", conf_version) == 1:
+                for section in self.config.sections:
+                    if self.is_database(section):
+                        db_sec = self.config[section]
+                        db_sec["NumActiveNodes"] = db_sec["NumMasterNodes"]
+                        del db_sec["NumMasterNodes"]
             # always increase version number
             self.config["Global"]["ConfVersion"] = self.version
             self.commit()
@@ -783,7 +790,7 @@ class EXAConf:
                           port = self.def_db_port,
                           owner = def_owner,
                           nodes = self.get_nodes(),
-                          num_master_nodes = self.get_num_nodes(),
+                          num_active_nodes = self.get_num_nodes(),
                           data_volume = "DataVolume1",
                           commit = False)
 
@@ -922,6 +929,13 @@ class EXAConf:
         """
         return section.split(":")[0].strip() == "DB"
     # }}}
+    # {{{ Check if section is a backup schedule
+    def is_backup(self, section):
+        """
+        Returns true if the given section is an EXASolution backup schedule.
+        """
+        return section.split(":")[0].strip() == "Backup"
+    # }}}  
     # {{{ Check if section is a BucketFS
     def is_bucketfs(self, section):
         """
@@ -1092,7 +1106,7 @@ class EXAConf:
             self.commit()
     # }}}
     # {{{ Set node conf
-    def set_node_conf(self, node_conf, node_id, remove_disks=False):
+    def set_node_conf(self, node_conf, node_id, remove_disks=False, commit=True):
         """
         Changes the values of the given keys for the given node (or all nodes). 
         The node ID can't be changed. If 'remove_disks' is True, all disks
@@ -1167,8 +1181,8 @@ class EXAConf:
                         if "direct_io" in disk and disk.direct_io is False: # omit 'True' since it's the default case
                             disk_sec["DirectIO"] = str(disk.direct_io)                        
                         node_sec["Disk : " + name] = disk_sec
-
-        self.commit()
+        if commit:
+            self.commit()
     # }}}
     # {{{ Remove node
     def remove_node(self, nid, force  = False, commit = True):
@@ -1467,7 +1481,7 @@ class EXAConf:
     # }}}
 
     # {{{ Add database
-    def add_database(self, name, version, mem_size, port, owner, nodes, num_master_nodes, data_volume,
+    def add_database(self, name, version, mem_size, port, owner, nodes, num_active_nodes, data_volume,
                      params = None, ldap_servers = None, enable_auditing = None, interfaces = None, 
                      volume_quota = None, volume_move_delay = None, commit = True):
         """
@@ -1488,7 +1502,7 @@ class EXAConf:
         db_sec["Port"] = port
         db_sec["Owner"] = str(owner[0]) + " : " + str(owner[1])
         db_sec["Nodes"] = ','.join([str(x) for x in nodes])
-        db_sec["NumMasterNodes"] = num_master_nodes
+        db_sec["NumActiveNodes"] = num_active_nodes
         db_sec["DataVolume"] = data_volume
         # optional values
         if params:
@@ -1510,7 +1524,7 @@ class EXAConf:
         db_sec.comments["Owner"] = ["User and group IDs that own this database (e. g. '1000:1005')."]
         db_sec.comments["MemSize"] = ["Memory size over all nodes (e. g. '1 TiB')."]
         db_sec.comments["Nodes"] = ["Comma-separated list of node IDs for this DB (put reserve nodes at the end, if any)."]
-        db_sec.comments["NumMasterNodes"] = ["Nr. of initially active nodes for this DB. The remaining nodes will be reserve nodes."]
+        db_sec.comments["NumActiveNodes"] = ["Nr. of initially active nodes for this DB. The remaining nodes will be reserve nodes."]
         db_sec.comments["DataVolume"] = ["Name of the data volume to be used by this database."]
         db_sec.comments["Params"] = ["OPTIONAL: DB parameters"]
         # default JDBC sub-section
@@ -1571,7 +1585,7 @@ class EXAConf:
         if db_name != "all" and not self.database_exists(db_name):
             self.add_database(name = db_name, version = db_conf.version, mem_size = db_conf.mem_size,
                               port = db_conf.port, owner = db_conf.owner, nodes = db_conf.nodes,
-                              num_master_nodes = db_conf.num_master_nodes, data_volume = db_conf.data_volume,
+                              num_active_nodes = db_conf.num_active_nodes, data_volume = db_conf.data_volume,
                               params = db_conf.params if "params" in db_conf else None,
                               ldap_servers = db_conf.ldap_servers if "ldap_servers" in db_conf else None,
                               enable_auditing = db_conf.enable_auditing if "enable_auditing" in db_conf else None,
@@ -1595,8 +1609,8 @@ class EXAConf:
                     db_sec["Port"] = db_conf.port
                 if "nodes" in db_conf:
                     db_sec["Nodes"] = ','.join([str(x) for x in db_conf.nodes])
-                if "num_master_nodes" in db_conf:
-                    db_sec["NumMasterNodes"] = db_conf.num_master_nodes
+                if "num_active_nodes" in db_conf:
+                    db_sec["NumActiveNodes"] = db_conf.num_active_nodes
                 if "owner" in db_conf:
                     db_sec["Owner"] = str(db_conf.owner[0]) + " : " + str(db_conf.owner[1])
                 if "params" in db_conf:
@@ -1790,7 +1804,8 @@ class EXAConf:
                  commit = True):
         """
         Add the given user to EXAConf. If 'encode_password' is True, the given password string
-        will be encoded as an /etc/shadow compatible SHA512 hash.
+        will be encoded as an /etc/shadow compatible SHA512 hash (otherwise it will be automatically 
+        encoded if it's not in an /etc/shadow compatible format).
         """
         
         if not isinstance(userid, int):
@@ -1812,7 +1827,7 @@ class EXAConf:
         user_sec["Group"] = group
         user_sec["LoginEnabled"] = login_enabled
         if password is not None:
-            if encode_passwd is True:
+            if encode_passwd is True or is_shadow_encoded(password) is False:
                 user_sec["Passwd"] = encode_shadow_passwd(password)
             else:
                 user_sec["Passwd"] = password
@@ -1833,7 +1848,9 @@ class EXAConf:
         """
         Changes the values of the given keys for the given user (or all users).
         The username and ID can't be changed.  If 'encode_passwd' is True, the 
-        password will be encoded as an /etc/shadow compatible SHA512 hash.
+        password will be encoded as an /etc/shadow compatible SHA512 hash
+        (otherwise it will be automatically encoded if it's not in an 
+        /etc/shadow compatible format).
 
         If 'username' == 'all', the given user_conf is applied to all users.
         Take care to remove all options that should not be changed.
@@ -1859,7 +1876,7 @@ class EXAConf:
                 user_sec = self.config["Users"][username]
                 # encode password and merge groups right in the user_conf
                 if "passwd" in user_conf:
-                    if encode_passwd is True:
+                    if encode_passwd is True or is_shadow_encoded(user_conf.passwd) is False:
                         user_conf.passwd = encode_shadow_passwd(user_conf.passwd)
                 if "additional_groups" in user_conf and len(user_conf.additional_groups) > 0:
                     if extend_groups and "additional_groups" in user[1]:
@@ -2764,7 +2781,10 @@ class EXAConf:
                 conf.mem_size =  int(int(units2bytes(db_sec["MemSize"])) / 1048576)
                 conf.port = db_sec.as_int("Port")
                 conf.nodes = [ int(n.strip()) for n in db_sec["Nodes"].split(",") if n.strip() != "" ]
-                conf.num_master_nodes = db_sec.as_int("NumMasterNodes")
+                if "NumActiveNodes" in db_sec.scalars:
+                    conf.num_active_nodes = db_sec.as_int("NumActiveNodes")
+                else:
+                    conf.num_active_nodes = db_sec.as_int("NumMasterNodes")
                 conf.owner = tuple([ int(x.strip()) for x in db_sec["Owner"].split(":") if x.strip() != "" ])
                 # optional values:
                 if "Params" in db_sec.scalars:
@@ -2801,6 +2821,23 @@ class EXAConf:
                     conf.oracle.bucketfs = self.def_bucketfs
                     conf.oracle.bucket = self.def_bucket
                     conf.oracle.dir = self.def_oracle_driver_dir
+                # optional sections: backups
+                for section in db_sec.sections:
+                    if self.is_backup(section):
+                        ba_sec = db_sec[section]
+                        if 'backups' not in conf:
+                            conf['backups'] = config()
+                        backup_conf = config({
+                            'volume' : ba_sec['Volume'],
+                            'level' : ba_sec.as_int('Level'),
+                            'expire' : ba_sec['Expire'],
+                            'minute' : ba_sec['Minute'],
+                            'hour' : ba_sec['Hour'],
+                            'day' : ba_sec['Day'],
+                            'month' : ba_sec['Month'],
+                            'weekday' : ba_sec['Weekday']})
+                        conf.backups[self.get_section_id(section)] = backup_conf 
+
                 # add current database    
                 db_configs[db_name] = conf
         return self.filter_configs(db_configs, filters)
@@ -3185,7 +3222,7 @@ class EXAConf:
         self.set_node_conf(node_conf, node_conf.id, remove_disks=True)
     # }}}
     # {{{ Add node device
-    def add_node_device(self, node_id, disk, device, path = None):
+    def add_node_device(self, node_id, disk, device, path = None, commit=True):
         """ 
         Adds the given device to the given disk on the given node. If 'path' is specified, a mapping is also added. 
 
@@ -3210,10 +3247,10 @@ class EXAConf:
                 node_disks[disk].mapping = []
             node_disks[disk].mapping.append((device,path))
         
-        self.set_node_conf(node_conf, node_conf.id)
+        self.set_node_conf(node_conf, node_conf.id, commit)
     # }}}
     # {{{ Remove node device
-    def remove_node_device(self, node_id, disk, device, remove_empty_disk=True):
+    def remove_node_device(self, node_id, disk, device, remove_empty_disk=True, commit=True):
         """
         Removes the given device from the node and disk. Also deletes the disk
         if it does not contain other devices and 'remove_empty_disk' is True.
@@ -3243,7 +3280,7 @@ class EXAConf:
         if remove_empty_disk and "devices" not in node_disks[disk]:
             del node_disks[disk]
         
-        self.set_node_conf(node_conf, node_conf.id, remove_disks = remove_empty_disk)
+        self.set_node_conf(node_conf, node_conf.id, remove_disks = remove_empty_disk, commit=commit)
     # }}}
     # {{{ Remove node drives
     def remove_node_drives(self, node_id, disk, drives_to_remove):

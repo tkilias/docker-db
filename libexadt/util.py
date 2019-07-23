@@ -15,6 +15,9 @@ except ImportError:
     import getpass
     pwd = None
     grp = None
+    
+# Valid prefixes for encoded /etc/shadow passwords    
+shadow_prefixes = ['$1$', '$2a$', '$2y$', '$5$', '$6$']
  
 class atomic_file_writer(object): #{{{
     def __init__(self, path, mode = 0644, uid = None, gid = None):
@@ -366,6 +369,17 @@ def encode_shadow_passwd(passwd): #{{{
     Encodes the given passwd into an /etc/shadow compatible SHA512 hash.
     """
     return crypt.crypt(passwd, "$6$"+base64.b64encode(os.urandom(16))+"$")
+#}}}
+
+def is_shadow_encoded(passwd): #{{{
+    """
+    Checks if the given password is encoded in an '/etc/shadow' compatible format 
+    (by comparing the prefixes to known supported types).
+    """
+    for p in shadow_prefixes:
+        if passwd.startswith(p):
+            return True
+    return False
 #}}}
 
 # {{{ utility to convert a string to seconds, currently support till weeks
