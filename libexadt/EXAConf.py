@@ -195,8 +195,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.1.5"
-        self.re_version = "6.1.5"
+        self.version = "6.2.0"
+        self.re_version = "6.2.0"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -246,12 +246,18 @@ class EXAConf:
         -1, 0 or 1 if first is found to be lower, equal or higher than second.
         NOTE : the '-dX' suffix is ignored!
         """
-        
+
+
+
         first = first.strip()
         second = second.strip()
         #Strip the "-dY" part if found
         first = first.split("-")[0]
         second = second.split("-")[0]
+
+        first = re.sub('X', '', re.sub('\.X', '.0', re.sub('[\-a-zA-Z]+.*$', 'X', first)))
+        second = re.sub('X', '', re.sub('\.X', '.0', re.sub('[\-a-zA-Z]+.*$', 'X', second)))
+
         # now compare the digits, starting from left (i. e. major version)
         try:
             for (f,s) in zip(first.split("."), second.split(".")):
@@ -2651,7 +2657,9 @@ class EXAConf:
                 if "ExposedPorts" in node_sec.scalars:
                     node_conf.exposed_ports =  [ p.split(":") for p in node_sec["ExposedPorts"].split(",") ]
                     node_conf.exposed_ports[:] = [ (int(p[0].strip()), int(p[1].strip())) for p in node_conf.exposed_ports ]
-
+                if "State" in node_sec.scalars:
+                    node_conf.state = str(node_sec["State"]).strip().lower()
+                else: node_conf.state = ''
                 node_configs[nid] = node_conf
         return node_configs
     # }}}
