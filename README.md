@@ -43,11 +43,11 @@ Currently supported features:
 The Exasol Docker image and `exadt` CLI tool have been developed and tested with Docker 18.03.1-ce (API 1.37) and Python module `docker` (formerly known as `docker-py`) 3.2.1 on Fedora 27. It may also work with earlier versions, but that is not guaranteed.
  
 Please see [the Docker installation documentation](https://docs.docker.com/installation/) for details on how to upgrade your Docker daemon.
-
+ 
 ### Privileged mode
 
 Docker privileged mode is required for permissions management, UDF support and environment configuration and validation (sysctl, hugepages, block-devices, etc.).
- 
+
 ## Host OS
 
 We currently only support Docker on Linux. If you are using a Windows host you'd have to create a Linux VM.

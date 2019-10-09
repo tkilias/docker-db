@@ -1,70 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
 <license>
 <companyName>EXASOL</companyName>
-<comment>EXASOL Free Small Business Edition Advanced</comment>
-<memory>200</memory>
+<comment>EXASOL Community Edition</comment>
+<memory>0</memory>
 <distributor>EXASOL AG</distributor>
 <distributorID>10001</distributorID>
-<licenseID>526</licenseID>
+<licenseID>863</licenseID>
 
 <features>
-        <feature>
-                <name>Geospatial</name>
-        </feature>
-        <feature>
-                <name>LDAP authentication</name>
-        </feature>
-        <feature>
-                <name>Python</name>
-        </feature>
-        <feature>
-                <name>Query cache</name>
-        </feature>
-        <feature>
-                <name>Graph search</name>
-        </feature>
-        <feature>
-                <name>Generic JDBC connections</name>
-        </feature>
-        <feature>
-                <name>Lua</name>
-        </feature>
-        <feature>
-                <name>Skyline</name>
-        </feature>
-        <feature>
-                <name>R</name>
-        </feature>
-        <feature>
-                <name>Native Oracle connections</name>
-        </feature>
-        <feature>
-                <name>Java</name>
-        </feature>
-        <feature>
-                <name>eUDF</name>
-        </feature>
+	<feature>
+		<name>Geospatial</name>
+	</feature>
+	<feature>
+		<name>LDAP authentication</name>
+	</feature>
+	<feature>
+		<name>Python</name>
+	</feature>
+	<feature>
+		<name>Query cache</name>
+	</feature>
+	<feature>
+		<name>Graph search</name>
+	</feature>
+	<feature>
+		<name>Generic JDBC connections</name>
+	</feature>
+	<feature>
+		<name>Lua</name>
+	</feature>
+	<feature>
+		<name>Skyline</name>
+	</feature>
+	<feature>
+		<name>R</name>
+	</feature>
+	<feature>
+		<name>Native Oracle connections</name>
+	</feature>
+	<feature>
+		<name>Java</name>
+	</feature>
+	<feature>
+		<name>eUDF</name>
+	</feature>
 </features>
 <limits>
-        <limit>
-                <name>Cluster nodes</name>
-                <value>1</value>
-        </limit>
+	<limit>
+		<name>Database raw size (GiB)</name>
+		<value>200</value>
+	</limit>
+	<limit>
+		<name>Cluster nodes</name>
+		<value>1</value>
+	</limit>
 </limits>
 <keys>
 <licenseKey>
-eJwdlDlyw0AMBHO9xJEK9/EHfUK5A/8/coMquyRySexMY7A/v3/6+oSEzcZaR+q4hlp79cjEjpdE
-R1houM14q4vVBuu7z1LOjJblhHmppXem+KY566NpItK9s1I8Zcp1h9hEb7spe19J/mTVxqpluutu
-hTil9p7Ztc1CEKVyRAVd3NT1svGR4LGskrbSGt6QNCsqaHvHmTsZfEJaMhMVLKAudGskpyuwqMmv
-3E3p9bHumQqZsSl31EnhK/BYqhRdVNqiAEjpUomeLJOy1mlXLoQfY7k6qaCxiMpJqqHcd8FIOcjN
-eqBrHQiIEA94Gxz4bB+F8ARIpIQ/BfSccuuAusy2msXQvJUt+hcF66Fph9ji+CJL1dnYcVDasl0A
-V0Rk4Akt7BoBRehmOteBIhAtjBIngJorfV0GY8F8coenFWaC0dtETnrR4EYa7kSGVy5GdhyGUlDm
-zcQs2xIW4NOkpHe8DPl1qwL/8LR6XFPhRacRYzCkmiI5rK8w7wGTUtI4QYVqXUSUbQgxGVJtUkGn
-sjd6kurrCrxyNsYVcUXkZZeBUBKDvKbQI+b6MLwuF36wNU2J80P9JgLIAQlIgQtxoogPPsbMxPWd
-O6De6wnkXTbdiRcAYw7k0ODCDN3gmnACuBmeGNq8/DM0dBerwYpewtEFdvwxLJiOCyvaZYOQD199
-3pNuQPGC0JjuZ9yeZpOB6xjNLrrk0MMVSQzmBcyHcoGEC8i7bbMY7edO7aIoxJLhx5bt5Yl7wKQq
-D8dmXAVGlYwRUuMw8OlzRspDmyrLpFOKkHGSkCwSl0OYUjhoOAcYdg4cINFNJBN+PTss3NgyU04W
-XDh9aupuVHI0fV7f9z+Ubf6/
+eJwdlLl1QkEMRXMqccTRvvRAE+QO3H/kq58AhxlJb9P8/P7p66NaayMxs5Jtad1dFpnLj/Ts8ZmM
+inGRkklTzjWlUkTHO2eXJuWu1iojpWqi0quyxVFGTI5Ouep1mW4tMWoYOVrUZtnU8rkukS1yI3yZ
+wm+5Up+dkTYVrrpL5njkDtCV7r5iXnff271rmdey2W6dnSURW2a2ViGqPdlhwBMDQ4cyxGnezlec
+DrApSQOggdmZ5JCvDd/KpasWOLWTDoCtcEvx3jmFQIsuBXEKw3RUN1dDPEGGpNXOrXCgBqdbdzSx
+rvMME4YXKkBJokGztgkArcAto2ClECGcEX16bT86Qp62dMIJJEGhlrCJrsJESSiIuAlERuAPxp4x
+K6Sv1FYanqKFA0BorITxEgdYHnawzahonpFosrMmJwyGIgFRgbhFrx+WgmjrpUjLmL7eDEO4Why6
+KAn6EQ44YN5OTSvGnC2B0WCEP16NeSpGd+ESifNEDgQ9IxuA1JKdQio1F406xcoakcjvmY0xqEQw
+ibmVOMyhcSk2iUVJYjUx7VxFjEuaGhFGzsjiDMxDdmJZF8LLadDL1287kM4AbWQJ6dzNYo/cdAZq
+KIm1EIM4e6YXOrAOkANNxIV5qcgEshbiuso23dLghZJb0k04/CJkSLrMCxSiKkBx/4ICJXAS0M8O
+kzVgc6PYXcxNs2cJIVKXDgITHansOStHiRFRvBjCfDgCAXkXVgkc49ga7IABi4jCJJ3AX8XAAG48
+AJ3HrFCEGXT004HVJNI0ZiAgQqBnt9V+mUS1xL6jf6rxWtyK8NLs3iNEefXRm2IT7m1gMOoYMpJN
+tlIx0pyFgDxPlYd+Xt/3P9fK/vA=
 </licenseKey>
 </keys>
 </license>

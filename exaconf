@@ -6,12 +6,12 @@ try:
     from libexadt import util
     assert EXAConfError, util #silence pyflakes
 except ImportError:
-    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.2.1/lib')
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.2.2/lib')
     from libconfd.common import util
     from libconfd.EXAConf import EXAConfError
 
-my_version = "6.2.1"
-        
+my_version = "6.2.2"
+
 #{{{ log_err
 def log_err(msg):
     sys.stderr.write('[%s] %s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg))
@@ -49,19 +49,22 @@ def add_node(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.add_node(nid = cmd.node_id, priv_net=cmd.priv_net, pub_net=cmd.pub_net)
 # }}}
- 
+
 # {{{ Modify node
 def modify_node(cmd):
     """
     Modify an existing node.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    if cmd.node_id != "all" and not exaconf.node_exists(cmd.node_id):
+    if cmd.node_id != "_all" and not exaconf.node_exists(cmd.node_id):
         print "Node '%s' does not exist in EXAConf '%s'!" % (cmd.node_id, cmd.exaconf)
         return 1
     nodes = exaconf.get_nodes()
     node_conf = nodes[cmd.node_id]
     # modify supported parameters
+    if (cmd.pub_net and cmd.pub_ip) or (cmd.priv_net and cmd.priv_ip):
+        print "You can either change the IP or the network. Not both!"
+        return 1
     if cmd.priv_net:
         node_conf.private_net = cmd.priv_net
         if 'private_ip' in node_conf:
@@ -70,6 +73,14 @@ def modify_node(cmd):
         node_conf.public_net = cmd.pub_net
         if 'public_ip' in node_conf:
             del node_conf.public_ip
+    if cmd.priv_ip:
+        node_conf.private_ip = cmd.priv_ip
+        if 'private_net' in node_conf:
+            del node_conf.private_net
+    if cmd.pub_ip:
+        node_conf.public_ip = cmd.pub_ip
+        if 'public_net' in node_conf:
+            del node_conf.public_net
 
     exaconf.set_node_conf(node_conf, cmd.node_id)
 # }}}
@@ -85,7 +96,7 @@ def remove_node(cmd):
 
 #{{{ Add node disk
 def add_node_disk(cmd):
-    """ 
+    """
     Adds an empty storage disk to the given node in EXAConf.
     """
 
@@ -94,35 +105,35 @@ def add_node_disk(cmd):
     drives = [ d.strip() for d in cmd.drives.split(",") if d.strip() != "" ] if cmd.drives else None
     exaconf.add_node_disk(cmd.node, cmd.disk, component = cmd.component, devices = devices, drives = drives, overwrite_existing = cmd.overwrite_existing)
 #}}}
- 
+
 #{{{ Remove node disk
 def remove_node_disk(cmd):
-    """ 
+    """
     Removes the given storage disk (or all disks) from the given node in EXAConf.
     """
 
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_node_disk(cmd.node, cmd.disk)
 #}}}
-  
+
 # {{{ Add node device
 def add_node_device(cmd):
     """
     Adds a device to an existing node in the given EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    exaconf.add_node_device(cmd.node, cmd.disk, cmd.device, cmd.path)
+    exaconf.add_node_device(cmd.node_id, cmd.disk, cmd.device, cmd.path)
 # }}}
-  
+
 # {{{ Remove node device
 def remove_node_device(cmd):
     """
     Removes a device from an existing node in the given EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    exaconf.remove_node_device(cmd.node, cmd.disk, cmd.device)
+    exaconf.remove_node_device(cmd.node_id, cmd.disk, cmd.device)
 # }}}
- 
+
 # {{{ Add volume
 def add_volume(cmd):
     """
@@ -130,15 +141,15 @@ def add_volume(cmd):
     """
     exaconf = read_exaconf(cmd.exaconf)
     vol_nodes = [ n.strip() for n in cmd.nodes.split(",") if n.strip() != "" ]
-    vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
+    vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" )
     if len(vol_owner) != 2:
         print "Please specify user and group ID for owner (e.g. 1000:1000)"
         return 1
-    exaconf.add_volume(cmd.name, cmd.type, cmd.size, cmd.disk, cmd.redundancy, 
+    exaconf.add_volume(cmd.name, cmd.type, cmd.size, cmd.disk, cmd.redundancy,
                        vol_nodes, vol_owner, cmd.num_master_nodes, cmd.perm,
                        cmd.labels, cmd.block_size, cmd.stripe_size)
 # }}}
-   
+
 #{{{ Modify volume
 def modify_volume(cmd):
     """
@@ -146,13 +157,13 @@ def modify_volume(cmd):
     """
     exaconf = read_exaconf(cmd.exaconf)
     volumes = exaconf.get_volumes()
-    if cmd.name != "all" and cmd.name not in volumes:
+    if cmd.name != "_all" and cmd.name not in volumes:
         print "Volume '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
         return 1
     vol_conf = volumes[cmd.name]
     # change supported options
     if cmd.owner:
-        vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
+        vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" )
         vol_conf.owner = vol_owner
     if cmd.size:
         vol_conf.size = cmd.size
@@ -164,18 +175,30 @@ def modify_volume(cmd):
         vol_conf.num_master_nodes = len(vol_conf.nodes)
     if cmd.num_master_nodes:
         vol_conf.num_master_nodes = cmd.num_master_nodes
+    if cmd.labels:
+        vol_conf.labels = cmd.labels
     exaconf.set_volume_conf(vol_conf, cmd.name)
 #}}}
-  
+
 # {{{ Add remote volume
 def add_remote_volume(cmd):
     """
     Adds a remote volume to the given EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    exaconf.add_remote_volume(cmd.type, cmd.url, cmd.name, cmd.id, cmd.username, cmd.passwd, cmd.options)
+    vol_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" )
+    if len(vol_owner) != 2:
+        print "Please specify user and group ID for owner (e.g. 1000:1000)"
+        return 1
+    exaconf.add_remote_volume(cmd.type, cmd.url, vol_owner,
+                              remote_volume_name = cmd.name,
+                              remote_volume_id = cmd.id,
+                              labels = cmd.labels,
+                              username = cmd.username,
+                              pasword = cmd.passwd,
+                              options = cmd.options)
 # }}}
- 
+
 # {{{ Remove volume
 def remove_volume(cmd):
     """
@@ -184,16 +207,16 @@ def remove_volume(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_volume(cmd.name, cmd.force)
 # }}}
-  
+
 # {{{ Remove remote volume
 def remove_remote_volume(cmd):
     """
     Removes the given remote volume from the given EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    exaconf.remove_remote_volume(name = cmd.name, ID = None, force=cmd.force)
+    exaconf.remove_remote_volume(remote_volume_name = cmd.name, remote_volume_id = None, force=cmd.force)
 # }}}
- 
+
 # {{{ Set storage conf
 def set_storage_conf(cmd):
     """
@@ -209,7 +232,7 @@ def set_storage_conf(cmd):
         st_conf.space_warn_threshold = cmd.space_warn_threshold
     exaconf.set_storage_conf(st_conf)
 # }}}
-  
+
 #{{{ Encode shadow passwd
 def encode_shadow_passwd(cmd):
     """
@@ -239,7 +262,7 @@ def add_group(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.add_group(cmd.name, cmd.id)
 #}}}
- 
+
 #{{{ Remove group
 def remove_group(cmd):
     """
@@ -248,7 +271,7 @@ def remove_group(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_group(cmd.name)
 #}}}
-  
+
 #{{{ List users
 def list_users(cmd):
     """
@@ -266,7 +289,7 @@ def list_users(cmd):
         if "authorized_keys" in u[1]:
             print "  auth-keys : %s" % "\n              ".join(u[1].authorized_keys)
 #}}}
- 
+
 #{{{ Add user
 def add_user(cmd):
     """
@@ -284,7 +307,7 @@ def add_user(cmd):
             auth_keys = [ l.strip() for l in f ]
     # prompt for password if not given and always encode it
     if passwd is None and cmd.prompt_passwd:
-        passwd = getpass.getpass() 
+        passwd = getpass.getpass()
         encode_passwd = True
     exaconf.add_user(username = cmd.name, userid = cmd.id,
                      group = cmd.group, login_enabled = cmd.login_enabled,
@@ -301,7 +324,7 @@ def modify_user(cmd):
     """
     exaconf = read_exaconf(cmd.exaconf)
     users = exaconf.get_users()
-    if cmd.name != "all" and cmd.name not in users:
+    if cmd.name != "_all" and cmd.name not in users:
         print "User '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
         return 1
     user_conf = users[cmd.name]
@@ -328,16 +351,16 @@ def passwd_user(cmd):
         print "User '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
         return 1
     user_conf = users[cmd.name]
-    
+
     user_conf.passwd = cmd.passwd
     encode_passwd = False if cmd.encode_passwd is None else True
     # prompt for password if not given and always encode it
     if user_conf.passwd is None:
-        user_conf.passwd = getpass.getpass() 
+        user_conf.passwd = getpass.getpass()
         encode_passwd = True
     exaconf.set_user_conf(user_conf, cmd.name, encode_passwd=encode_passwd)
 #}}}
- 
+
 #{{{ Remove user
 def remove_user(cmd):
     """
@@ -346,35 +369,35 @@ def remove_user(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_user(cmd.name)
 #}}}
- 
+
 #{{{ Add BucketFS
 def add_bucketfs(cmd):
     """
     Add a BucketFS to EXAConf.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    bfs_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
-    exaconf.add_bucketfs(name = cmd.name, owner = bfs_owner,
+    bfs_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" )
+    exaconf.add_bucketfs(bucketfs_name = cmd.name, owner = bfs_owner,
                          http_port = cmd.http_port, https_port = cmd.https_port,
-                         sync_key = cmd.sync_key, 
+                         sync_key = cmd.sync_key,
                          sync_period = cmd.sync_period,
                          path = cmd.path)
 #}}}
- 
+
 #{{{ Modify BucketFS
 def modify_bucketfs(cmd):
     """
     Modify an existing BucketFS. Everything except sync_period and path.
     """
     exaconf = read_exaconf(cmd.exaconf)
-    bucketfs_conf = exaconf.get_bucketfs()
-    if cmd.name != "all" and cmd.name not in bucketfs_conf.fs:
+    bucketfs = exaconf.get_bucketfs()
+    if cmd.name != "_all" and cmd.name not in bucketfs:
         print "BucketFS '%s' does not exist in EXAConf '%s'!" % (cmd.name, cmd.exaconf)
         return 1
-    bfs_conf = bucketfs_conf.fs[cmd.name]
+    bfs_conf = bucketfs[cmd.name]
     # change supported options
     if cmd.owner:
-        bfs_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" ) 
+        bfs_owner = tuple( int(o.strip()) for o in cmd.owner.split(":") if o.strip() != "" )
         bfs_conf.owner = bfs_owner
     if cmd.http_port:
         bfs_conf.http_port = cmd.http_port
@@ -384,7 +407,7 @@ def modify_bucketfs(cmd):
         bfs_conf.sync_period = cmd.sync_period
     exaconf.set_bucketfs_conf(bfs_conf, cmd.name)
 #}}}
-  
+
 #{{{ Remove BucketFS
 def remove_bucketfs(cmd):
     """
@@ -393,7 +416,7 @@ def remove_bucketfs(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_bucketfs(cmd.name)
 #}}}
-  
+
 #{{{ Add Bucket
 def add_bucket(cmd):
     """
@@ -403,13 +426,13 @@ def add_bucket(cmd):
     additional_files = None
     if cmd.additional_files:
         additional_files = [ f.strip() for f in cmd.additional_files.split(",") if f.strip() != "" ]
-    exaconf.add_bucket(name = cmd.name, bfs_name = cmd.bfs_name,
-                       public = cmd.public, 
-                       read_passwd = cmd.read_passwd,
-                       write_passwd = cmd.write_passwd,
+    exaconf.add_bucket(bucket_name = cmd.name, bucketfs_name = cmd.bfs_name,
+                       public = cmd.public,
+                       read_password = cmd.read_passwd,
+                       write_password = cmd.write_passwd,
                        additional_files = additional_files)
 #}}}
-   
+
 #{{{ Modify Bucket
 def modify_bucket(cmd):
     """
@@ -419,12 +442,12 @@ def modify_bucket(cmd):
     additional_files = None
     if cmd.additional_files:
         additional_files = [ f.strip() for f in cmd.additional_files.split(",") if f.strip() != "" ]
-    bucketfs_conf = exaconf.get_bucketfs()
-    if cmd.bfs_name not in bucketfs_conf.fs:
+    bucketfs = exaconf.get_bucketfs()
+    if cmd.bfs_name not in bucketfs:
         print "BucketFS '%s' does not exist in EXAConf '%s'!" % (cmd.bfs_name, cmd.exaconf)
         return 1
-    bfs_conf = bucketfs_conf.fs[cmd.bfs_name]
-    if cmd.name != "all" and cmd.name not in bfs_conf.buckets:
+    bfs_conf = bucketfs[cmd.bfs_name]
+    if cmd.name != "_all" and cmd.name not in bfs_conf.buckets:
         print "Bucket '%s' does not exist in BucketFS '%s' in EXAConf '%s'!" % (cmd.bfs_name, cmd.name, cmd.exaconf)
         return 1
     b_conf = bfs_conf.buckets[cmd.name]
@@ -438,7 +461,7 @@ def modify_bucket(cmd):
         b_conf.additional_files = additional_files
     exaconf.set_bucket_conf(b_conf, cmd.name, cmd.bfs_name)
 #}}}
-   
+
 #{{{ Remove Bucket
 def remove_bucket(cmd):
     """
@@ -447,13 +470,65 @@ def remove_bucket(cmd):
     exaconf = read_exaconf(cmd.exaconf)
     exaconf.remove_bucket(cmd.name, cmd.bfs_name)
 #}}}
- 
+
+#{{{ Add backup schedule
+def add_backup_schedule(cmd):
+    """
+    Add a backup schedule to an existing database in EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.add_backup_schedule(db_name = cmd.db_name, backup_name = cmd.backup_name,
+                          volume = cmd.volume, level = cmd.level, minute = cmd.minute,
+                          hour = cmd.hour, day = cmd.day, month = cmd.month,
+                          weekday = cmd.weekday, enabled = not cmd.disabled)
+#}}}
+
+#{{{ Remove backup schedule
+def remove_backup_schedule(cmd):
+    """
+    Remove an existing backup schedule from a database in EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    exaconf.remove_backup_schedule(db_name = cmd.db_name, backup_name = cmd.backup_name)
+#}}}
+
+#{{{ Modify backup schedule
+def modify_backup_schedule(cmd):
+    """
+    Modify an existing backup schedule in EXAConf.
+    """
+    exaconf = read_exaconf(cmd.exaconf)
+    databases = exaconf.get_databases()
+    if cmd.db_name not in databases:
+        print "Database '%s' does not exist in EXAConf '%s'!" % (cmd.db_name, cmd.exaconf)
+        return 1
+    db_conf = databases[cmd.db_name]
+    if 'backups' not in db_conf or (cmd.backup_name != "_all" and cmd.backup_name not in db_conf.backups):
+        print "Backup schedule '%s' of DB '%s' does not exist in EXAConf '%s'!" % (cmd.backup_name, cmd.db_name, cmd.exaconf)
+        return 1
+    ba_conf = db_conf.backups[cmd.backup_name]
+    # change supported options
+    if cmd.minute:
+        ba_conf.minute = cmd.minute
+    if cmd.hour:
+        ba_conf.hour = cmd.hour
+    if cmd.day:
+        ba_conf.day = cmd.day
+    if cmd.month:
+        ba_conf.month = cmd.month
+    if cmd.weekday:
+        ba_conf.weekday = cmd.weekday
+    if cmd.disabled:
+        ba_conf.enabled = not cmd.disabled
+    exaconf.set_backup_schedule_conf(ba_conf, cmd.db_name, cmd.backup_name)
+#}}}
+
 # {{{ Commit
 def commit(cmd):
     """
     Commits the current state of the local node to all online nodes in the cluster
     by copying the given EXAConf to all nodes and using 'exalocalconf' to commit
-    the EXAConf on each node. This command only works within a cluster (i. e. 
+    the EXAConf on each node. This command only works within a cluster (i. e.
     it must be executed on an Exasol cluster node / container).
     """
     try:
@@ -463,12 +538,12 @@ def commit(cmd):
     except ImportError:
         print "Can't load required modules. This command only works within an Exasol cluster."
         return 1
-    
+
     command = 'exalocalconf --commit-local -c %s 2>&1' % shquote(cmd.exaconf)
 
     print "=== Step 1: synchronizing '%s' ===" % shquote(cmd.exaconf)
     exaconf = read_exaconf(cmd.exaconf)
-    sync = file_sync.file_sync(log_stderr=True, verbose=True)
+    sync = file_sync.file_sync(log_stderr=True, verbose=cmd.verbose)
     sync.sync_file('%s' % shquote(cmd.exaconf))
     print "--> Successful!"
 
@@ -495,7 +570,7 @@ def commit(cmd):
     print "=== Step 3: creating status file ==="
     rev = str(exaconf.get_revision())
     ts = time.strftime("%d.%m.%Y - %H:%M:%S")
-    sync.write_to_nodes("'%s' : revision %s : %s" % (cmd.exaconf, rev, ts), 
+    sync.write_to_nodes("'%s' : revision %s : %s" % (cmd.exaconf, rev, ts),
                         "/exa/etc/EXAConf.commited.manually")
     print "--> Successful!"
 # }}}
@@ -509,21 +584,21 @@ def main():
     cmdparser = parser.add_subparsers(
             title = 'commands',
             description = 'supported commands')
-                                    
-       
+
+
     # version command
     parser_ver = cmdparser.add_parser(
             'version',
             help='Print the exaconf CLI tool version number')
     parser_ver.set_defaults(func=print_version)
-        
+
     # add node command
     parser_an = cmdparser.add_parser(
             'add-node',
             help='Add a new node to EXAConf.')
     parser_an.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
@@ -543,14 +618,14 @@ def main():
             required = False,
             help='ID for the new node (automatically selected if omitted).')
     parser_an.set_defaults(func=add_node)
-         
+
     # modify node command
     parser_mn = cmdparser.add_parser(
             'modify-node',
             help='Modify an existing node in EXAConf.')
     parser_mn.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
@@ -567,15 +642,23 @@ def main():
             '--pub-net', '-P',
             type=str,
             help="Public network (e.g. '10.10.0.12/24'). Characters 'x' and 'X' in the IP are replaced with the node ID.")
+    parser_mn.add_argument(
+            '--priv-ip', '-i',
+            type=str,
+            help="Private IP address (e.g. '10.10.10.12'). The netmask is not modified.")
+    parser_mn.add_argument(
+            '--pub-ip', '-I',
+            type=str,
+            help="Public IP address (e.g. '10.10.0.12'). The netmask is not modified.")
     parser_mn.set_defaults(func=modify_node)
-                                     
+
     # remove node command
     parser_rn = cmdparser.add_parser(
             'remove-node',
             help='Remove a node from EXAConf.')
     parser_rn.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
@@ -596,8 +679,8 @@ def main():
             'add-node-device',
             help='Add a device to an existing node in EXAConf.')
     parser_and.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file.')
@@ -622,14 +705,14 @@ def main():
             required = False,
             help="Absolute path to the directory that contains the device file (if it's not in '/exa/data/storage/').")
     parser_and.set_defaults(func=add_node_device)
-                                      
+
     # remove node device command
     parser_rnd = cmdparser.add_parser(
             'remove-node-device',
             help='Remove a device from an existing node in EXAConf. The disk is also removed if it does not contain other devices.')
     parser_rnd.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
@@ -649,14 +732,14 @@ def main():
             required = True,
             help="Device name (only the basename of the device file)")
     parser_rnd.set_defaults(func=remove_node_device)
-                                       
+
     # add node disk command
     parser_andi = cmdparser.add_parser(
             'add-node-disk',
             help="Add an disk to an existing node in EXAConf. Use 'add-node-device' to add a disk with devices.")
     parser_andi.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
@@ -691,14 +774,14 @@ def main():
             required = False,
             help="Overwrite any existing disk with the same name.")
     parser_andi.set_defaults(func=add_node_disk)
-                                        
+
     # remove node disk command
     parser_rndi = cmdparser.add_parser(
             'remove-node-disk',
             help='Remove a disk (or all disks) from an existing node in EXAConf.')
     parser_rndi.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
@@ -713,14 +796,14 @@ def main():
             required = True,
             help="The disk that should be removed ('all' for all disks).")
     parser_rndi.set_defaults(func=remove_node_disk)
-                                         
+
     # add volume command
     parser_av = cmdparser.add_parser(
             'add-volume',
             help='Add a new volume to EXAConf.')
     parser_av.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
@@ -780,14 +863,14 @@ def main():
             type=int,
             help="Stripe-size in bytes (default: 262144).")
     parser_av.set_defaults(func=add_volume)
-                                         
+
     # modify volume command
     parser_mv = cmdparser.add_parser(
             'modify-volume',
             help='Modify an existing volume in EXAConf.')
     parser_mv.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
@@ -817,15 +900,19 @@ def main():
             '--num-master-nodes', '-m',
             type=int,
             help="Number of master nodes (default: same as nr. of nodes in '--nodes').")
+    parser_mv.add_argument(
+            '--labels', '-l',
+            type=str,
+            help="Comma separated list of labels, e. g. 'best,volume,ever' (default: None).")
     parser_mv.set_defaults(func=modify_volume)
-                                           
+
     # add remote volume command
     parser_arv = cmdparser.add_parser(
             'add-remote-volume',
             help='Add a new volume to EXAConf.')
     parser_arv.add_argument(
-            'exaconf', 
-            type=str, 
+            'exaconf',
+            type=str,
             metavar='EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help='The EXAConf file')
@@ -838,11 +925,16 @@ def main():
             '--type', '-t',
             type=str,
             required = True,
-            help="Type of the volume ('smb', 'ftp' or 's3').")  
+            help="Type of the volume ('smb', 'ftp' or 's3').")
+    parser_arv.add_argument(
+            '--owner', '-o',
+            type = str,
+            required = False,
+        help="User and group ID of the remote volume (e. g. '1000:1001').")
     parser_arv.add_argument(
             '--id', '-i',
             type=int,
-            help="ID of the volume (automatically generated if omitted).")  
+            help="ID of the volume (automatically generated if omitted).")
     parser_arv.add_argument(
             '--url', '-u',
             type=str,
@@ -857,9 +949,13 @@ def main():
             type=str,
             help="Password for accessing the remote volume' (default: None).")
     parser_arv.add_argument(
-            '--options', '-o',
+            '--options', '-f',
             type=str,
             help="Additional options for the remote volume' (default: None).")
+    parser_arv.add_argument(
+            '--labels', '-l',
+            type=str,
+            help="Comma separated list of labels, e. g. 'best,volume,ever' (default: None).")
     parser_arv.set_defaults(func=add_remote_volume)
 
     # remove volume command
@@ -883,7 +979,7 @@ def main():
             default=False,
             help="remove volume even if it's in use by a database")
     parser_rv.set_defaults(func=remove_volume)
- 
+
     # remove remote volume command
     parser_rrv = cmdparser.add_parser(
             'remove-remote-volume',
@@ -905,7 +1001,7 @@ def main():
             default=False,
             help="remove remote volume even if it's in use by a database")
     parser_rrv.set_defaults(func=remove_remote_volume)
-  
+
     # set storage conf command
     parser_ssc = cmdparser.add_parser(
             'set-storage-conf',
@@ -929,7 +1025,7 @@ def main():
             type = int,
             help="Space usage threshold (in percent, per node) for sending a warning")
     parser_ssc.set_defaults(func=set_storage_conf)
-   
+
     # encode-shadow command
     parser_enc = cmdparser.add_parser(
             'encode-shadow',
@@ -940,7 +1036,7 @@ def main():
             required = False,
             help = "The password that should be encoded.")
     parser_enc.set_defaults(func=encode_shadow_passwd)
-    
+
     # list-groups command
     parser_lsg = cmdparser.add_parser(
             'list-groups',
@@ -952,7 +1048,7 @@ def main():
             default = '/exa/etc/EXAConf', nargs='?',
             help = 'The EXAConf file')
     parser_lsg.set_defaults(func=list_groups)
-     
+
     # add-group command
     parser_adg = cmdparser.add_parser(
             'add-group',
@@ -974,7 +1070,7 @@ def main():
             required = True,
             help = "The group ID.")
     parser_adg.set_defaults(func=add_group)
-       
+
     # remove-group command
     parser_rmg = cmdparser.add_parser(
             'remove-group',
@@ -991,7 +1087,7 @@ def main():
             required = True,
             help = "The group name.")
     parser_rmg.set_defaults(func=remove_group)
- 
+
     # list-users command
     parser_lsu = cmdparser.add_parser(
             'list-users',
@@ -1003,7 +1099,7 @@ def main():
             default = '/exa/etc/EXAConf', nargs='?',
             help = 'The EXAConf file')
     parser_lsu.set_defaults(func=list_users)
-          
+
     # add-user command
     parser_adu = cmdparser.add_parser(
             'add-user',
@@ -1066,7 +1162,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help="File containing public SSH keys (one per line).")
     parser_adu.set_defaults(func=add_user)
-  
+
     # modify-user command
     parser_mdu = cmdparser.add_parser(
             'modify-user',
@@ -1112,7 +1208,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help = "Extend the existing keys with the given ones.")
     parser_mdu.set_defaults(func=modify_user)
-   
+
     # passwd-user command
     parser_pwu = cmdparser.add_parser(
             'passwd-user',
@@ -1139,7 +1235,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help = "Encode the given cleartext password as a SHA512 hash value (always True if prompted for password).")
     parser_pwu.set_defaults(func=passwd_user)
- 
+
     # remove-user command
     parser_rmu = cmdparser.add_parser(
             'remove-user',
@@ -1156,7 +1252,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = True,
             help = "The user name.")
     parser_rmu.set_defaults(func=remove_user)
-          
+
     # add-bucketfs command
     parser_abfs = cmdparser.add_parser(
             'add-bucketfs',
@@ -1203,7 +1299,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help = "A on-default path for this bucket.")
     parser_abfs.set_defaults(func=add_bucketfs)
-           
+
     # modify-bucketfs command
     parser_mbfs = cmdparser.add_parser(
             'modify-bucketfs',
@@ -1240,7 +1336,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help = "The synchronization interval (default value is used if omitted).")
     parser_mbfs.set_defaults(func=modify_bucketfs)
-            
+
     # remove-bucketfs command
     parser_rbfs = cmdparser.add_parser(
             'remove-bucketfs',
@@ -1257,7 +1353,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = True,
             help = "The BucketFS name.")
     parser_rbfs.set_defaults(func=remove_bucketfs)
-            
+
     # add-bucket command
     parser_adb = cmdparser.add_parser(
             'add-bucket',
@@ -1299,7 +1395,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help = "An optional comma-separated list of additional files for this Bucket.")
     parser_adb.set_defaults(func=add_bucket)
-             
+
     # modify-bucket command
     parser_mob = cmdparser.add_parser(
             'modify-bucket',
@@ -1341,7 +1437,7 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = False,
             help = "An optional comma-separated list of additional files for this Bucket.")
     parser_mob.set_defaults(func=modify_bucket)
-             
+
     # remove-bucket command
     parser_rmb = cmdparser.add_parser(
             'remove-bucket',
@@ -1363,20 +1459,174 @@ If not specified, the password will automatically be encoded if it's not in an /
             required = True,
             help = "The BucketFS name.")
     parser_rmb.set_defaults(func=remove_bucket)
-              
+
+    # add-backup-schedule command
+    parser_abup = cmdparser.add_parser(
+            'add-backup-schedule',
+            help = 'Add a backup schedule to an existing database in EXAConf.')
+    parser_abup.add_argument(
+            'exaconf',
+            type = str,
+            metavar = 'EXACONF',
+            default = '/exa/etc/EXAConf', nargs='?',
+            help = 'The EXAConf file')
+    parser_abup.add_argument(
+            '--db-name', '-n',
+            type = str,
+            required = True,
+            help = "The DB name.")
+    parser_abup.add_argument(
+            '--backup-name', '-N',
+            type = str,
+            required = True,
+            help = "The backup schedule name.")
+    parser_abup.add_argument(
+            '--disabled', '-D',
+            action = "store_true",
+            required = False,
+            help = "Disable the backup schedule (default: enabled).")
+    parser_abup.add_argument(
+            '--volume', '-v',
+            type = str,
+            required = True,
+            help = "Name of the destination volume.")
+    parser_abup.add_argument(
+            '--level', '-l',
+            type = int,
+            required = True,
+            help = "Backup level.")
+    parser_abup.add_argument(
+            '--expire', '-e',
+            type = str,
+            default = '0',
+            required = False,
+            help = "Expire time, e. g. '1w 2d 5m 10s' (default: never expire).")
+    parser_abup.add_argument(
+            '--minute', '-m',
+            type = str,
+            default = '*',
+            help = "'Minute' value for cron job (default: '*').")
+    parser_abup.add_argument(
+            '--hour', '-H',
+            type = str,
+            default = '*',
+            help = "'Hour' value for cron job (default: '*').")
+    parser_abup.add_argument(
+            '--day', '-d',
+            type = str,
+            default = '*',
+            help = "'Day' value for cron job (default: '*').")
+    parser_abup.add_argument(
+            '--month', '-M',
+            type = str,
+            default = '*',
+            help = "'Month' value for cron job (default: '*').")
+    parser_abup.add_argument(
+            '--weekday', '-w',
+            type = str,
+            default = '*',
+            help = "'Weekday' value for cron job (default: '*').")
+    parser_abup.set_defaults(func=add_backup_schedule)
+
+    # modify-backup-schedule command
+    parser_mbup = cmdparser.add_parser(
+            'modify-backup-schedule',
+            help = 'Modify an existing backup schedule in EXAConf.')
+    parser_mbup.add_argument(
+            'exaconf',
+            type = str,
+            metavar = 'EXACONF',
+            default = '/exa/etc/EXAConf', nargs='?',
+            help = 'The EXAConf file')
+    parser_mbup.add_argument(
+            '--db-name', '-n',
+            type = str,
+            required = True,
+            help = "The DB name.")
+    parser_mbup.add_argument(
+            '--backup-name', '-N',
+            type = str,
+            required = True,
+            help = "The backup schedule name.")
+    parser_mbup.add_argument(
+            '--disabled', '-D',
+            action = "store_true",
+            required = False,
+            help = "Disable the backup schedule (default: enabled).")
+    parser_mbup.add_argument(
+            '--minute', '-m',
+            type = str,
+            default = '*',
+            help = "'Minute' value for cron job (default: '*').")
+    parser_mbup.add_argument(
+            '--hour', '-H',
+            type = str,
+            default = '*',
+            help = "'Hour' value for cron job (default: '*').")
+    parser_mbup.add_argument(
+            '--day', '-d',
+            type = str,
+            default = '*',
+            help = "'Day' value for cron job (default: '*').")
+    parser_mbup.add_argument(
+            '--month', '-M',
+            type = str,
+            default = '*',
+            help = "'Month' value for cron job (default: '*').")
+    parser_mbup.add_argument(
+            '--weekday', '-w',
+            type = str,
+            default = '*',
+            help = "'Weekday' value for cron job (default: '*').")
+    parser_mbup.set_defaults(func=modify_backup_schedule)
+
+    # remove-backup-schedule command
+    parser_rbup = cmdparser.add_parser(
+            'remove-backup-schedule',
+            help = 'Remove an existing backup schedule from a database in EXAConf.')
+    parser_rbup.add_argument(
+            'exaconf',
+            type = str,
+            metavar = 'EXACONF',
+            default = '/exa/etc/EXAConf', nargs='?',
+            help = 'The EXAConf file')
+    parser_rbup.add_argument(
+            '--db-name', '-n',
+            type = str,
+            required = True,
+            help = "The DB name.")
+    parser_rbup.add_argument(
+            '--backup-name', '-N',
+            type = str,
+            required = True,
+            help = "The backup schedule name.")
+    parser_rbup.set_defaults(func=remove_backup_schedule)
+
     # commit command
     parser_c = cmdparser.add_parser(
             'commit',
-            help = "Commit local '/exa/etc/EXAConf' to all online cluster nodes.")
+            help = """Commit local '/exa/etc/EXAConf' to all online cluster nodes,
+by changing local configurations according to EXAConf. This works for the following components:
+        - users and groups
+        - remote volumes
+        - bucketfs and buckets
+        - name resolution
+        - cron jobs
+        - syslog
+        """)
     parser_c.add_argument(
             'exaconf',
             type = str,
             metavar = 'EXACONF',
             default = '/exa/etc/EXAConf', nargs='?',
             help = 'The EXAConf file')
- 
+    parser_c.add_argument(
+            '--verbose', '-v',
+            action='store_true',
+            default = False,
+            help = "Enable verbose output.")
     parser_c.set_defaults(func=commit)
-    
+
     command = parser.parse_args()
     command.func(command)
  # }}}

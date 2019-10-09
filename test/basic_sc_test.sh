@@ -48,10 +48,10 @@ while getopts "i:D:Ph" opt; do
     esac
 done
  
-wait_start() {
+wait_db_start() {
     SEC_WAIT=120
     SEC_DONE=0
-    log "Waiting $SEC_WAIT seconds for container $1 to start... "
+    log "Waiting $SEC_WAIT seconds for DB in container $1 to start... "
     while true 
     do
         if [[ $SEC_DONE -lt $SEC_WAIT ]]; then
@@ -77,7 +77,9 @@ set -e
 log "=== Starting self-contained basic test ==="
 log "= PART 1 : Creating container without a persistent volume ="
 CONTAINER=$("$DOCKER" run --detach --privileged "$IMAGE") &&
-wait_start "$CONTAINER" 
+wait_db_start "$CONTAINER" 
+log "Checking ConfD connection..."
+"$DOCKER" exec "$CONTAINER" /bin/bash -c 'examaster -c -n localhost' 2>&1 | tee /dev/stderr | grep localhost
 log "Testing exaplus functionality"
 "$DOCKER" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
 log "Creating a file within the container"
@@ -86,7 +88,7 @@ log "Stopping the container"
 "$DOCKER" stop -t 60 "$CONTAINER"
 log "Restarting the container"
 "$DOCKER" start "$CONTAINER"
-wait_start "$CONTAINER"
+wait_db_start "$CONTAINER"
 log "Checking if the file still exists... "
 if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
     die "File-check failed!"
@@ -100,7 +102,7 @@ if [[ ! -z $("$DOCKER" volume ls | grep "$VOLUME") ]]; then
     "$DOCKER" volume rm "$VOLUME"
 fi
 CONTAINER=$("$DOCKER" run --detach --privileged -v $VOLUME:/exa "$IMAGE") &&
-wait_start "$CONTAINER" 
+wait_db_start "$CONTAINER" 
 log "Testing exaplus functionality"
 "$DOCKER" exec "$CONTAINER" /bin/bash -c 'X=$(ls /usr/opt/EXASuite-*/EXASolution-*/bin/Console/exaplus | tail -n1); echo "SELECT 123*42345;" | $X -c n11:8888 -u sys -P exasol' 2>&1 | tee /dev/stderr | grep -q 5208435
 log "Creating a file within the container"
@@ -109,7 +111,7 @@ log "Stopping the container"
 "$DOCKER" stop -t 60 "$CONTAINER"
 log "Restarting the container"
 "$DOCKER" start "$CONTAINER"
-wait_start "$CONTAINER"
+wait_db_start "$CONTAINER"
 log "Checking if the file still exists... "
 if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
     die "File-check failed!"
@@ -119,7 +121,7 @@ log "Stopping and deleting the container"
 "$DOCKER" rm "$CONTAINER"
 log "Creating a new container with the same volume"
 CONTAINER=$("$DOCKER" run --detach --privileged -v $VOLUME:/exa "$IMAGE") &&
-wait_start "$CONTAINER" 
+wait_db_start "$CONTAINER" 
 log "Checking if the file still exists... "
 if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
     die "File-check failed!"
