@@ -3,12 +3,12 @@
 import sys, os, stat, ipaddr, configobj, StringIO, hashlib, re
 from collections import OrderedDict as odict
 try:
-    from util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded
-    units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded #silence pyflakes
+    from util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded, str2sec, sec2str
+    units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded, str2sec, sec2str #silence pyflakes
     from py_compat import is_str
     is_str
 except ImportError:
-    from libconfd.common.util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded
+    from libconfd.common.util import units2bytes, bytes2units, gen_base64_passwd, get_euid, get_egid, gen_node_uuid, encode_shadow_passwd, is_shadow_encoded, str2sec, sec2str
     from libconfd.common.py_compat import is_str
 
 # {{{ Class EXAConfError
@@ -195,8 +195,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.2.1"
-        self.re_version = "6.2.1"
+        self.version = "6.1.7"
+        self.re_version = "6.1.7"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -246,18 +246,12 @@ class EXAConf:
         -1, 0 or 1 if first is found to be lower, equal or higher than second.
         NOTE : the '-dX' suffix is ignored!
         """
-
-
-
+        
         first = first.strip()
         second = second.strip()
         #Strip the "-dY" part if found
         first = first.split("-")[0]
         second = second.split("-")[0]
-
-        first = re.sub('X', '', re.sub('\.X', '.0', re.sub('[\-a-zA-Z]+.*$', 'X', first)))
-        second = re.sub('X', '', re.sub('\.X', '.0', re.sub('[\-a-zA-Z]+.*$', 'X', second)))
-
         # now compare the digits, starting from left (i. e. major version)
         try:
             for (f,s) in zip(first.split("."), second.split(".")):
@@ -1119,7 +1113,7 @@ class EXAConf:
         that are not part of the given node_conf will be deleted. Existing disks
         will always be updated and new ones added.
 
-        If 'node_id' == 'all', the given node_confuration is applied to all nodes.
+        If 'node_id' == '_all', the given node_confuration is applied to all nodes.
         Take care to remove all options that should not be changed (e. g. the
         network address).
 
@@ -1129,15 +1123,15 @@ class EXAConf:
         """
 
         # add node if it doesn't exist
-        if node_id != "all" and not self.node_exists(node_id):
+        if node_id != "_all" and not self.node_exists(node_id):
             self.add_node(priv_net = node_conf.private_net, nid = node_id)
-            # nothing to change, since the ID can't be "all"
+            # nothing to change, since the ID can't be "_all"
             return
 
         # change configuration for the given node(s)
         nodes = self.get_nodes()
         for node in nodes.items():
-            if node_id == "all" or node[0] == node_id:
+            if node_id == "_all" or node[0] == node_id:
                 node_sec = self.config["Node : " + str(node[0])]
                 if "name" in node_conf:
                     node_sec["Name"] = node_conf.name
@@ -1388,7 +1382,7 @@ class EXAConf:
         (or all volumes). The  following options can't be changed and are
         therefore ignored: 'name', 'type', 'block_size' and 'stripe_size'.
 
-        If 'vol_name' == 'all', the given vol_configuration is applied to all volumes.
+        If 'vol_name' == '_all', the given vol_configuration is applied to all volumes.
         Take care to remove all options that should not be changed.
 
         If a volume with the given name does not exist, it will be added and the
@@ -1397,7 +1391,7 @@ class EXAConf:
         """
 
         #add volume if it doesn't exist
-        if vol_name != "all" and not self.volume_exists(vol_name):
+        if vol_name != "_all" and not self.volume_exists(vol_name):
             self.add_volume(vol_conf.name, vol_conf.type, vol_conf.size, vol_conf.disk, vol_conf.redundancy,
                             vol_conf.owner, vol_conf.nodes,
                             vol_conf.num_master_nodes if "num_master_nodes" in vol_conf else None,
@@ -1407,13 +1401,13 @@ class EXAConf:
                             vol_conf.stripe_size if "stripe_size" in vol_conf else None,
                             vol_conf.shared if "shared" in vol_conf else None,
                             commit = commit)
-            # nothing to change, since the ID can't be "all"
+            # nothing to change, since the ID can't be "_all"
             return
 
         #change configuration for existing volumes
         volumes = self.get_volumes()
         for vol in volumes.iteritems():
-            if vol_name == "all" or vol[0] == vol_name:
+            if vol_name == "_all" or vol[0] == vol_name:
                 vol_sec = self.config["EXAVolume : " + vol[0]]
                 if "size" in vol_conf:
                     vol_sec["Size"] = vol_conf.size if is_str(vol_conf.size) else bytes2units(vol_conf.size)
@@ -1445,7 +1439,7 @@ class EXAConf:
         (or all volumes). The  following options can't be changed and are
         therefore ignored: 'name' and 'type'
 
-        If 'volume' == 'all', the given vol_confuration is applied to all 
+        If 'volume' == '_all', the given vol_confuration is applied to all 
         remote volumes. Take care to remove all options that should not be 
         changed.
 
@@ -1455,20 +1449,20 @@ class EXAConf:
         """
 
         #add volume if it doesn't exist
-        if vname != "all" and not self.remote_volume_exists(vname):
+        if vname != "_all" and not self.remote_volume_exists(vname):
             self.add_remote_volume(vol_conf.name, vol_conf.type, vol_conf.url,
                                    vol_conf.username if "username" in vol_conf else None,
                                    vol_conf.passwd if "passwd" in vol_conf else None,
                                    vol_conf.labels if "labels" in vol_conf else None,
                                    vol_conf.options if "options" in vol_conf else None,
                                    vol_conf.owner if "owner" in vol_conf else None)
-            # nothing to change, since the ID can't be "all"
+            # nothing to change, since the ID can't be "_all"
             return
 
         #change configuration for existing volumes
         volumes = self.get_remote_volumes()
         for vol in volumes.iteritems():
-            if vname == "all" or vol[0] == vname:
+            if vname == "_all" or vol[0] == vname:
                 vol_sec = self.config["EXAVolume : " + vol[0]]
                 if "url" in vol_conf:
                     vol_sec["URL"] = vol_conf.url
@@ -1494,6 +1488,8 @@ class EXAConf:
         Adds a new database to EXAConf.
         """
 
+        if self.database_exists(name):
+            raise EXAConfError("Database '%s' can't be added because it already exists!" % name)
         # check if given owner exists
         if not self.uid_exists(owner[0]):
             raise EXAConfError("Can't add database '%s' because owner with UID %i doesn't exist!\n" % (name, owner[0])) 
@@ -1579,7 +1575,7 @@ class EXAConf:
         ignored. Subsections like 'JDBC' must be complete in 'db_conf'
         (single options can't be changed).
 
-        If 'db_name' == 'all', the given db_configuration is applied to all databases.
+        If 'db_name' == '_all', the given db_configuration is applied to all databases.
         Take care to remove all options that should not be changed.
 
         If a database with the given name does not exist, it will be added and the
@@ -1588,7 +1584,7 @@ class EXAConf:
         """
 
         # add volume if it doesn't exist
-        if db_name != "all" and not self.database_exists(db_name):
+        if db_name != "_all" and not self.database_exists(db_name):
             self.add_database(name = db_name, version = db_conf.version, mem_size = db_conf.mem_size,
                               port = db_conf.port, owner = db_conf.owner, nodes = db_conf.nodes,
                               num_active_nodes = db_conf.num_active_nodes, data_volume = db_conf.data_volume,
@@ -1598,12 +1594,12 @@ class EXAConf:
                               interfaces = db_conf.interfaces if "interfaces" in db_conf else None,
                               volume_quota = db_conf.volume_quota if "volume_quota" in db_conf else None,
                               volume_move_delay = db_conf.volume_move_delay if "volume_move_delay" in db_conf else None)
-            # nothing to change, since the ID can't be "all"
+            # nothing to change, since the ID can't be "_all"
             return
         
         dbs = self.get_databases()
         for db in dbs.iteritems():
-            if db_name == "all" or db[0] == db_name:
+            if db_name == "_all" or db[0] == db_name:
                 db_sec = self.config["DB : " + db[0]]
                 if "version" in db_conf:
                     db_sec["Version"] = db_conf.version
@@ -1643,14 +1639,103 @@ class EXAConf:
                         db_sec["Oracle"] = db_conf.oracle.to_section()
 
         if commit:
-	    self.commit()
+            self.commit()
     # }}}
 
+    # {{{ Add backup schedule
+    def add_backup_schedule(self, db_name, backup_name, volume, level, minute, hour, day, month, weekday, 
+                            expire = 0, enabled = True, commit = True):
+        """
+        Add a new backup schedule to the given database.
+        """
+        
+        if not self.database_exists(db_name):
+            raise EXAConfError("Database '%s' does not exist!" % db_name)
+
+        db_sec = self.config["DB : " + db_name]
+        ba_sec_name = "Backup : " + backup_name
+        if ba_sec_name in db_sec.sections:
+            raise EXAConfError("Backup '%s' already exists in database '%s'!" % (backup_name, db_name))
+        
+        db_sec[ba_sec_name] = {}
+        ba_sec = db_sec[ba_sec_name]
+        ba_sec['Enabled'] = str(enabled)
+        ba_sec['Volume'] = str(volume)
+        ba_sec['Level'] = str(level)
+        ba_sec['Minute'] = str(minute)
+        ba_sec['Hour'] = str(hour)
+        ba_sec['Day'] = str(day)
+        ba_sec['Month'] = str(month)
+        ba_sec['Weekday'] = str(weekday)
+        ba_sec['Expire'] = str(expire)
+        
+        if commit:
+            self.commit()
+    # }}}
+    # {{{ Remove backup schedule
+    def remove_backup_schedule(self, db_name, backup_name, commit = True):
+        """
+        Remove an existing backup schedule from the given database.
+        """
+
+        if not self.database_exists(db_name):
+            raise EXAConfError("Database '%s' does not exist!" % db_name)
+
+        db_sec = self.config["DB : " + db_name]
+        ba_sec_name = "Backup : " + backup_name
+        if ba_sec_name not in db_sec.sections:
+            raise EXAConfError("Backup '%s' does not exist in database '%s'!" % (backup_name, db_name))
+
+        del db_sec[ba_sec_name]
+
+        if commit:
+            self.commit()
+    # }}}
+    # {{{ Set backup schedule conf
+    def set_backup_schedule_conf(self, backup_conf, db_name, backup_name, commit = True):
+        """
+        Changes the values of the given keys in the given backup section.
+        
+        If 'backup_name' == '_all', the given backup_configuration is applied to all backup
+        schedules of the given database. Take care to remove all options that should not be changed.
+
+        If a backup schedule with the given name does not exist, it will be added and the
+        given configuration will be applied. In that case the given 'backup_conf'
+        must contain all mandatory parameters for 'add_backup_schedule()'!
+        """
+        
+        if not self.database_exists(db_name):
+            raise EXAConfError("Database '%s' does not exist!" % db_name)
+
+        if backup_name != "_all" and not self.db_backup_exists(db_name, backup_name):
+            self.add_backup_schedule(db_name = db_name,
+                                     backup_name = backup_name, 
+                                     volume = backup_conf.volume,
+                                     level = backup_conf.level,
+                                     minute = backup_conf.minute,
+                                     hour = backup_conf.hour,
+                                     day = backup_conf.day,
+                                     month = backup_conf.month,
+                                     weekday = backup_conf.weekday,
+                                     expire = backup_conf.expire,
+                                     enabled = backup_conf.enabled,
+                                    commit = commit)
+            return
+                
+        db_sec = self.config["DB : " + db_name]
+        ba_sec_name = "Backup : " + backup_name
+        for section in db_sec.sections:
+            if section == ba_sec_name or backup_name == "_all":
+                ba_sec = db_sec[section]
+                ba_sec.update(backup_conf.to_section())
+
+        if commit is True:
+            self.commit()
+    # }}}  
+
     # {{{ Add BucketFS
-    def add_bucketfs(self, name, owner,
-                     http_port, https_port, 
-                     sync_key = None, sync_period = None, 
-                     path = None, commit = True):
+    def add_bucketfs(self, name, owner, http_port, https_port, 
+                     sync_key = None, sync_period = None, path = None, commit = True):
         """
         Adds a new BucketFS with given name and parameters.
         """
@@ -1687,7 +1772,7 @@ class EXAConf:
         """
         Changes the values of the given keys in the given BucketFS section.
         
-        If 'bfs_name' == 'all', the given bfs_configuration is applied to all BucketFSs.
+        If 'bfs_name' == '_all', the given bfs_configuration is applied to all BucketFSs.
         Take care to remove all options that should not be changed.
 
         If a BucketFS with the given name does not exist, it will be added and the
@@ -1695,7 +1780,7 @@ class EXAConf:
         must contain all mandatory parameters for 'add_bucketfs()'!
         """
 
-        if bfs_name != "all" and not self.bucketfs_exists(bfs_name):
+        if bfs_name != "_all" and not self.bucketfs_exists(bfs_name):
             self.add_bucketfs(name = bfs_name, 
                               owner = bfs_conf.owner,
                               http_port = bfs_conf.http_port,
@@ -1708,7 +1793,7 @@ class EXAConf:
                 
         bucketfs_conf = self.get_bucketfs()                
         for bfs in bucketfs_conf.values():
-            if bfs.name == bfs_name or bfs_name == "all":
+            if bfs.name == bfs_name or bfs_name == "_all":
                 bfs_sec = self.config["BucketFS : %s" % bfs_name]
                 bfs_sec.update(bfs_conf.to_section(ignore_keys = ['bfs_name']))
 
@@ -1757,7 +1842,7 @@ class EXAConf:
         """
         Changes the values of the given keys in the given Bucket section.
         
-        If 'b_name' == 'all', the given bucket_configuration is applied to all Buckets
+        If 'b_name' == '_all', the given bucket_configuration is applied to all Buckets
         of the given BucketFS. Take care to remove all options that should not be changed.
 
         If a Bucket with the given name does not exist in the given BucketFS, it will be 
@@ -1767,7 +1852,7 @@ class EXAConf:
 
         if not self.bucketfs_exists(bfs_name):
             raise EXAConfError("Bucket '%s' can't be modified because BucketFS '%s' does not exist!" % (b_name, bfs_name))
-        if b_name != "all" and not self.bucket_exists(b_name, bfs_name):
+        if b_name != "_all" and not self.bucket_exists(b_name, bfs_name):
             self.add_bucket(name = b_name, bfs_name = bfs_name,
                             public = b_conf.public,
                             read_passwd = b_conf.read_passwd if 'read_passwd' in b_conf else None,
@@ -1780,7 +1865,7 @@ class EXAConf:
         for bfs in bucketfs_conf.values():
             if bfs.name == bfs_name:
                 for b in bfs.buckets.values():
-                    if b.name == b_name or b_name == "all":
+                    if b.name == b_name or b_name == "_all":
                         b_sec = self.config["BucketFS : %s" % bfs_name]["Bucket : %s" % b_name]
                         b_sec.update(b_conf.to_section(ignore_keys = ['name']))
 
@@ -1858,14 +1943,14 @@ class EXAConf:
         (otherwise it will be automatically encoded if it's not in an 
         /etc/shadow compatible format).
 
-        If 'username' == 'all', the given user_conf is applied to all users.
+        If 'username' == '_all', the given user_conf is applied to all users.
         Take care to remove all options that should not be changed.
 
         If a user with the given name does not exist, it will be added and the
         given configuration will be applied. In that case the given 'user_conf'
         must contain all mandatory parameters for 'add_user()'!
         """
-        if username != "all" and not self.user_exists(username):
+        if username != "_all" and not self.user_exists(username):
             self.add_user(username = username, userid = user_conf.id,
                           group = user_conf.group, login_enabled = user_conf.login_enabled,
                           password = user_conf.passwd if "passwd" in user_conf else None,
@@ -1876,7 +1961,7 @@ class EXAConf:
         # change configuration for existing users
         users = self.get_users()
         for user in users.items():
-            if username == "all" or user[0] == username:
+            if username == "_all" or user[0] == username:
                 # add missing config options in order to create a complete user entry
                 user_conf.update({k:v for k,v in self.get_users()[username].items() if k not in user_conf})
                 user_sec = self.config["Users"][username]
@@ -1942,7 +2027,7 @@ class EXAConf:
         Changes the values of the given keys for the given group (or all groups).
         The groupname can't be changed.
 
-        If 'group_name' == 'all', the given group_conf is applied to all groups.
+        If 'group_name' == '_all', the given group_conf is applied to all groups.
         Take care to remove all options that should not be changed.
 
         If a group with the given name does not exist, it will be added and the
@@ -1950,14 +2035,14 @@ class EXAConf:
         must contain all mandatory parameters for 'add_group()'!
         """
 
-        if group_name != "all" and not self.group_exists(group_name):
+        if group_name != "_all" and not self.group_exists(group_name):
             self.add_group(gid = group_conf.id)
             return
                             
         # change configuration for existing groups
         groups = self.get_groups()
         for group in groups:
-            if group_name == "all" or group == group_name:
+            if group_name == "_all" or group == group_name:
                 group_sec = self.config["Groups"][group_name]
                 group_sec.update(group_conf.to_section())
         self.commit()
@@ -2468,6 +2553,17 @@ class EXAConf:
                     return True
         return False                 
     # }}}
+    # {{{ Db backup exists
+    def db_backup_exists(self, db_name, backup_name):
+        """
+        Checks if the given backup schedule exists in the given DB section.
+        """
+        if not self.database_exists(db_name):
+            return False
+        db_sec = self.config["DB : " + db_name]
+        ba_sec_name = "Backup : " + backup_name
+        return ba_sec_name in db_sec.sections
+    #}}}
     # {{{ Node id exists
     def node_exists(self, nid):
         """
@@ -2657,9 +2753,7 @@ class EXAConf:
                 if "ExposedPorts" in node_sec.scalars:
                     node_conf.exposed_ports =  [ p.split(":") for p in node_sec["ExposedPorts"].split(",") ]
                     node_conf.exposed_ports[:] = [ (int(p[0].strip()), int(p[1].strip())) for p in node_conf.exposed_ports ]
-                if "State" in node_sec.scalars:
-                    node_conf.state = str(node_sec["State"]).strip().lower()
-                else: node_conf.state = ''
+
                 node_configs[nid] = node_conf
         return node_configs
     # }}}
@@ -2836,9 +2930,10 @@ class EXAConf:
                         if 'backups' not in conf:
                             conf['backups'] = config()
                         backup_conf = config({
+                            'enabled' : ba_sec.as_bool('Enabled'),
                             'volume' : ba_sec['Volume'],
                             'level' : ba_sec.as_int('Level'),
-                            'expire' : ba_sec['Expire'],
+                            'expire' : str2sec(ba_sec['Expire']),
                             'minute' : ba_sec['Minute'],
                             'hour' : ba_sec['Hour'],
                             'day' : ba_sec['Day'],
@@ -3220,7 +3315,7 @@ class EXAConf:
             raise EXAConfError("Node %s does not exist in '%s'." % (node_id, self.conf_path))
         node_conf = nodes_conf[str(node_id)]
         if "disks" in node_conf.keys():
-            if disk == "all":
+            if disk == "_all":
                 node_conf.disks.clear()
             else:
                 for d in tuple(node_conf.disks.values()):

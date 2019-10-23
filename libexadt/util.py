@@ -105,6 +105,66 @@ def bytes2units(num): #{{{
     return "%s YiB" % ("%-3.8f" % num).rstrip('0').rstrip('.')
 #}}}
  
+# {{{ str_to_seconds
+seconds_in_minute = 60
+seconds_in_hour = seconds_in_minute * 60
+seconds_in_day = seconds_in_hour * 24
+seconds_in_week = seconds_in_day * 7
+def str2sec(data):
+    if data == None:
+        return 0
+    # check if it's already an integer
+    try:
+        seconds = int(data)
+        return seconds
+    except ValueError:
+        pass
+    # convert if not
+    seconds = 0
+    ma_weeks = re.match(r'^(([0-9]+)w\s*)', data)
+    if ma_weeks:
+        seconds += int(ma_weeks.group(2)) * seconds_in_week
+        data = data[len(ma_weeks.group(1)):]
+    ma_days = re.match(r'^(([0-9]+)d\s*)', data)
+    if ma_days:
+        seconds += int(ma_days.group(2)) * seconds_in_day
+        data = data[len(ma_days.group(1)):]
+    ma_hours = re.match(r'^(([0-9]+)h\s*)', data)
+    if ma_hours:
+        seconds += int(ma_hours.group(2)) * seconds_in_hour
+        data = data[len(ma_hours.group(1)):]
+    ma_minutes = re.match(r'^(([0-9]+)m\s*)', data)
+    if ma_minutes:
+        seconds += int(ma_minutes.group(2)) * seconds_in_minute
+        data = data[len(ma_minutes.group(1)):]
+    ma_seconds = re.match(r'^(([0-9]+)s\s*)', data)
+    if ma_seconds:
+        seconds += int(ma_seconds.group(2))
+        data = data[len(ma_seconds.group(1)):]
+    if len(data) > 0:
+        try: seconds += int(data); data = ''
+        except: pass
+    if len(data) != 0:
+        raise Exception('Date time format must be: <num>w <num>d <num>h <num>m <num>s')
+    return seconds
+# }}}
+
+def sec2str(seconds): # {{{
+     seconds = int(seconds)
+     weeks   = seconds / seconds_in_week   ; seconds = seconds % seconds_in_week
+     days    = seconds / seconds_in_day    ; seconds = seconds % seconds_in_day
+     hours   = seconds / seconds_in_hour   ; seconds = seconds % seconds_in_hour
+     minutes = seconds / seconds_in_minute ; seconds = seconds % seconds_in_minute
+     data = []
+     if weeks   > 0: data.append("%dw" % weeks)
+     if days    > 0: data.append("%dd" % days)
+     if hours   > 0: data.append("%dh" % hours)
+     if minutes > 0: data.append("%dm" % minutes)
+     if seconds > 0: data.append("%ds" % seconds)
+     if len(data) == 0: return "0s"
+     return " ".join(data)
+# }}}
+
 def gen_passwd(length): #{{{
     """
     Generates a new password with given length.

@@ -243,7 +243,7 @@ class device_handler:
                 except Exception as e:
                     print "Failed to delete device file '%s': " % (fpath, e)
 
-        self.exaconf.remove_node_disk(node_conf.id, disk="all")
+        self.exaconf.remove_node_disk(node_conf.id, disk="_all")
         return deleted_devices
 #}}}
 
