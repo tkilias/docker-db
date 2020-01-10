@@ -196,8 +196,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.2.2"
-        self.re_version = "6.2.2"
+        self.version = "6.2.3"
+        self.re_version = "6.2.3"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -1544,7 +1544,7 @@ class EXAConf:
     # {{{ Add database
     def add_database(self, name, version, mem_size, port, owner, nodes, num_active_nodes, data_volume,
                      params = None, ldap_servers = None, enable_auditing = None, interfaces = None,
-                     volume_quota = None, volume_move_delay = None, commit = True):
+                     volume_quota = None, volume_move_delay = None, auto_start = None, commit = True):
         """
         Adds a new database to EXAConf.
         """
@@ -1580,6 +1580,8 @@ class EXAConf:
             db_sec["VolumeQuota"] = bytes2units(volume_quota)
         if volume_move_delay:
             db_sec["VolumeMoveDelay"] = volume_move_delay
+        if auto_start:
+            db_sec["AutoStart"] = auto_start
 
         # comments
         self.config.comments[db_sec_name] = ["\n", "An EXASOL database"]
@@ -1589,6 +1591,7 @@ class EXAConf:
         db_sec.comments["Nodes"] = ["Comma-separated list of node IDs for this DB (put reserve nodes at the end, if any)."]
         db_sec.comments["NumActiveNodes"] = ["Nr. of initially active nodes for this DB. The remaining nodes will be reserve nodes."]
         db_sec.comments["DataVolume"] = ["Name of the data volume to be used by this database."]
+        db_sec.comments["AutoStart"] = ["Start database automatically on cluster boot."]
         db_sec.comments["Params"] = ["OPTIONAL: DB parameters"]
         # default JDBC sub-section
         db_sec["JDBC"] = {}
@@ -1688,6 +1691,8 @@ class EXAConf:
                     db_sec["VolumeQuota"] = bytes2units(db_conf.volume_quota)
                 if "volume_move_delay" in db_conf:
                     db_sec["VolumeMoveDelay"] = db_conf.volume_move_delay
+                if "auto_start" in db_conf:
+                    db_sec["AutoSstart"] = db_conf.auto_start
                 if "jdbc" in db_conf:
                     if "JDBC" in db_sec.sections:
                         db_sec["JDBC"].update(db_conf.jdbc.to_section())
@@ -3047,6 +3052,9 @@ class EXAConf:
                     conf.volume_quota = int(units2bytes(db_sec["VolumeQuota"]))
                 if "VolumeMoveDelay" in db_sec.scalars:
                     conf.volume_move_delay = db_sec["VolumeMoveDelay"]
+                if "AutoStart" in db_sec.scalars:
+                    conf.auto_start = db_sec.as_bool("AutoStart")
+                else: conf.auto_start = True
                 # JDBC
                 conf["jdbc"] = config()
                 if "JDBC" in db_sec.sections:
