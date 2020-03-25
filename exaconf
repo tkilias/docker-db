@@ -6,11 +6,11 @@ try:
     from libexadt import util
     assert EXAConfError, util #silence pyflakes
 except ImportError:
-    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.2.4/lib')
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.2.5/lib')
     from libconfd.common import util
     from libconfd.EXAConf import EXAConfError
 
-my_version = "6.2.4"
+my_version = "6.2.5"
 
 #{{{ log_err
 def log_err(msg):
@@ -480,7 +480,7 @@ def add_backup_schedule(cmd):
     exaconf.add_backup_schedule(db_name = cmd.db_name, backup_name = cmd.backup_name,
                           volume = cmd.volume, level = cmd.level, minute = cmd.minute,
                           hour = cmd.hour, day = cmd.day, month = cmd.month,
-                          weekday = cmd.weekday, enabled = not cmd.disabled)
+                          weekday = cmd.weekday, expire = cmd.expire, enabled = not cmd.disabled)
 #}}}
 
 #{{{ Remove backup schedule
