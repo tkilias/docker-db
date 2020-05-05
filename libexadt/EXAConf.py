@@ -196,8 +196,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.2.5"
-        self.re_version = "6.2.5"
+        self.version = "6.2.6"
+        self.re_version = "6.2.6"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -1456,6 +1456,7 @@ class EXAConf:
             self.add_volume(vol_conf.name, vol_conf.type, vol_conf.size, vol_conf.disk, vol_conf.redundancy,
                             vol_conf.owner, vol_conf.nodes,
                             vol_conf.num_master_nodes if "num_master_nodes" in vol_conf else None,
+                            vol_conf.redundancy if "redundancy" in vol_conf else None,
                             vol_conf.labels if "labels" in vol_conf else None,
                             vol_conf.permissions if "permissions" in vol_conf else None,
                             vol_conf.block_size if "block_size" in vol_conf else None,
