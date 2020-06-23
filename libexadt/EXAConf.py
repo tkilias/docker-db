@@ -196,8 +196,8 @@ class EXAConf:
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "6.2.6"
-        self.re_version = "6.2.6"
+        self.version = "6.2.7"
+        self.re_version = "6.2.7"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -2984,7 +2984,7 @@ class EXAConf:
             except ValueError:
                 rvs = self.get_remote_volumes()
                 if remote_volume_name in rvs:
-                    rvid = rvs[remote_volume_name]
+                    rvid = rvs[remote_volume_name].vid
         # if remote volume name is already integer, return it
         else:
             rvid = remote_volume_name
@@ -3000,6 +3000,7 @@ class EXAConf:
         raise EXAConfError if the given remote volume id does not exist
         """
         rvname = None
+        rvid = None
         # is the remote_volume_id already a remote volume name?
         if is_str(remote_volume_id):
             try:
@@ -3011,7 +3012,7 @@ class EXAConf:
             rvid = remote_volume_id
         rvs = self.get_remote_volumes()
         for rv in rvs.items():
-            if rv[1].vid == rvid:
+            if str(rv[1].vid) == str(rvid):
                 rvname = rv[0]
         if rvname is None:
             raise EXAConfError('Remote volume {} does not exist in EXAConf'.format(remote_volume_id))
