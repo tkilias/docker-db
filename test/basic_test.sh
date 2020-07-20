@@ -95,6 +95,7 @@ if [[ "$DO_PULL" == "true" ]]; then
 fi
 set -e
 cd "$EXADT_DIR" # necessary for pipenv
+"$PIPENV" --python 2 2>> $INSTALL_LOG
 "$PIPENV" install -r exadt_requirements.txt 2>> "$INSTALL_LOG"
 "$PIPENV" run ./exadt list-clusters
 "$PIPENV" run ./exadt create-cluster --root "$ROOT/MyCluster/" --create-root MyCluster
