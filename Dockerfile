@@ -31,22 +31,22 @@ RUN yum --disablerepo=epel -y update ca-certificates && \
     rlwrap 
 
 LABEL name="EXASOL DB Docker Image"  \
-      version="6.2.7-d1" \
-      dbversion="6.2.7" \
-      osversion="6.2.7" \
-      reversion="6.2.7" \
+      version="6.2.8-d1" \
+      dbversion="6.2.8" \
+      osversion="6.2.8" \
+      reversion="6.2.8" \
       license="Proprietary" \
       vendor="EXASOL AG"
 
 
 COPY license/license.xml     /.license.xml
-ADD EXAClusterOS-6.2.7_LS-DOCKER-CentOS-7.5.1804_x86_64.tar.gz              /
-ENV PATH=/usr/opt/EXASuite-6/EXAClusterOS-6.2.7/bin:/usr/opt/EXASuite-6/EXAClusterOS-6.2.7/sbin:/usr/opt/EXASuite-6/EXARuntime-6.2.7/bin:/usr/opt/EXASuite-6/EXARuntime-6.2.7/sbin:/usr/opt/EXASuite-6/EXASolution-6.2.7/bin/Console:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    MANPATH=/usr/opt/EXASuite-6/EXAClusterOS-6.2.7/man:/usr/local/share/man:/usr/share/man \
-    EXA_IMG_VERSION="6.2.7-d1" \
-    EXA_DB_VERSION="6.2.7" \
-    EXA_OS_VERSION="6.2.7" \
-    EXA_RE_VERSION="6.2.7" 
+ADD EXAClusterOS-6.2.8_LS-DOCKER-CentOS-7.5.1804_x86_64.tar.gz              /
+ENV PATH=/usr/opt/EXASuite-6/EXAClusterOS-6.2.8/bin:/usr/opt/EXASuite-6/EXAClusterOS-6.2.8/sbin:/usr/opt/EXASuite-6/EXARuntime-6.2.8/bin:/usr/opt/EXASuite-6/EXARuntime-6.2.8/sbin:/usr/opt/EXASuite-6/EXASolution-6.2.8/bin/Console:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    MANPATH=/usr/opt/EXASuite-6/EXAClusterOS-6.2.8/man:/usr/local/share/man:/usr/share/man \
+    EXA_IMG_VERSION="6.2.8-d1" \
+    EXA_DB_VERSION="6.2.8" \
+    EXA_OS_VERSION="6.2.8" \
+    EXA_RE_VERSION="6.2.8" 
 
-ENTRYPOINT ["/usr/opt/EXASuite-6/EXAClusterOS-6.2.7/docker/entrypoint.sh"]
+ENTRYPOINT ["/usr/opt/EXASuite-6/EXAClusterOS-6.2.8/docker/entrypoint.sh"]
 CMD ["init-sc"]
