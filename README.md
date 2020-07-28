@@ -169,7 +169,7 @@ $ docker run -v "$CONTAINER_EXA":/exa --rm -i exasol/docker-db:<version> init-sc
 
 After the command has finished, the directory `$CONTAINER_EXA` contains all subdirectories as well as an EXAConf template (in `/etc`). 
 
-**NOTE: you man need to add `--privileged` if the host directory belongs to root.**
+**NOTE: you need to add `--privileged` if the host directory belongs to root.**
  
 ### b. Create an EXAConf template
 
