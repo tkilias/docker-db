@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<license>
+<companyName>EXASOL</companyName>
+<comment>Exasol Community Docker Edition</comment>
+<memory>10</memory>
+<distributor>EXASOL AG</distributor>
+<distributorID>10001</distributorID>
+<licenseID>1391</licenseID>
+
+<features>
+	<feature>
+		<name>Geospatial</name>
+	</feature>
+	<feature>
+		<name>LDAP authentication</name>
+	</feature>
+	<feature>
+		<name>Python</name>
+	</feature>
+	<feature>
+		<name>Query cache</name>
+	</feature>
+	<feature>
+		<name>Graph search</name>
+	</feature>
+	<feature>
+		<name>Generic JDBC connections</name>
+	</feature>
+	<feature>
+		<name>Lua</name>
+	</feature>
+	<feature>
+		<name>Skyline</name>
+	</feature>
+	<feature>
+		<name>R</name>
+	</feature>
+	<feature>
+		<name>Native Oracle connections</name>
+	</feature>
+	<feature>
+		<name>Java</name>
+	</feature>
+	<feature>
+		<name>eUDF</name>
+	</feature>
+</features>
+<limits>
+	<limit>
+		<name>Database raw size (GiB)</name>
+		<value>10</value>
+	</limit>
+	<limit>
+		<name>Cluster nodes</name>
+		<value>1</value>
+	</limit>
+</limits>
+<keys>
+<licenseKey>
+eJwllLlxA0EMBH1GIkuF/8mBScinofwtNU5VNEjeLoCZadzX51df74yK6XAZzU4T0ywRix2zTg+P
+qLVqr6k0k+c/frnURKhZxHrl+ni1WUlWRUqPb8/o6O6qmmhkjXZq6NhGb8lScjalytd72z22NaNt
+sru5NtNqlbSQNm1G8eZwi9KwVj2tqZbL6DM+zfiznk3jFBnx3Fhm23tgRYlUnvtpUh7HLHp3o5J7
+XPLTsiHVImVFR9Xk4yoUrNLkuJhT3pVJHLXahS3IY5zQlaIQ8xcGLJJVjNlir8zYuIuLitY+fuAZ
+Np2LYomwtUFrDnrpIth5Z8utLDKsVzbxHv+U2xNrdLI9nz0oNTLklogo/IowU46HpfGP+W7HFGF0
+0dYJLIdH3iF4gB2xReQSq/NvoqoMSGBInioGObNV68JmPktCMMmFjOEedERc8Nwe2XMHcvjCaaKF
+o+YuniBapgyPsDsc56PVJywggVgoCUZIFqRWNVjga5G9rDDowBuFPCQTQ3GdAqTo6GcsJf8isIIY
+2TsH5np4ggw/8zQ7JksHWGMxLWivhMkC1PHvuvrAaWF+VDqYxMFwnJLUAMDisZ31JMzY7NKhmdcT
+LwjPSUrRcAWpgoADU2YSWkLdKcUNw0KQOlp6XazrySegjNT4MYWBIv3UA6gKOXOpwARAjHTcBjGM
+ObAVONIxbMbgiibAhp2k01gCe+Ody8klec5hxPoGm3p4wazdRGfRnJpDtZqWdpZM8DoAcSQp34Em
+uMYK4iLB0uwSiHsX9MEgcbROeZ5HR1UACIvEPhCjsvCcPA3MDEu3IWxby95VuVRNWZNhpY13EEkz
+JGDyCginAOQR9vv18/0Hl8//EQ==
+</licenseKey>
+</keys>
+</license>
