@@ -248,7 +248,7 @@ class device_handler(object):
 #}}}
 
 #{{{ Create node file devices
-    def create_node_file_devices(self, node_id, disk, num, size, path, replace):
+    def create_node_file_devices(self, node_id, disk, num, size, path, replace, no_odirect = False):
         """
         Creates $num data (sparese) files of size $size for a single node and adds them to EXAConf.
         If 'path' is not empty, the devices are created there and corresponding mapping entries
@@ -285,7 +285,7 @@ class device_handler(object):
             my_conf = nodes_conf[node_id]
         # create disk if it doesn't exist
         if "disks" not in my_conf or disk not in my_conf.disks:
-            self.exaconf.add_node_disk(node_id, disk, component='exastorage')
+            self.exaconf.add_node_disk(node_id, disk, no_odirect = no_odirect, component='exastorage')
         for i in range(num):
             dev_file = self.get_file_name(dest_dir, my_conf, False)
             # check if file already exists
@@ -313,7 +313,7 @@ class device_handler(object):
 #}}}
 
 #{{{ Create file devices
-    def create_file_devices(self, disk, num, size, path, replace):
+    def create_file_devices(self, disk, num, size, path, replace, no_odirect = False):
         """
         Creates $num data (sparse) files of size $size for all nodes and adds them to EXAConf.
         If 'path' is not empty, the devices are created there and corresponding mapping entries
@@ -344,7 +344,7 @@ class device_handler(object):
                         os.makedirs(node_path)
                     except OSError as e:
                         raise DeviceError("Failed to create directory '%s': %s" % (node_path, e))
-            devices = self.create_node_file_devices(node_id, disk, num, size, node_path, replace)
+            devices = self.create_node_file_devices(node_id, disk, num, size, node_path, replace, no_odirect = no_odirect)
             created_devices[node_id] = devices[0]
             if len(devices[1]) > 0:
                 deleted_devices[node_id] = devices[1]
@@ -353,7 +353,7 @@ class device_handler(object):
 #}}}
 
 #{{{ Auto create file devices
-    def auto_create_file_devices(self, container_internal=False, max_space=None):
+    def auto_create_file_devices(self, container_internal=False, no_odirect=False, max_space=None):
         """
         Automatically determines the available free space in the root directory of the current
         cluster and creates one file device per node for the default disk. 'container_internal'
@@ -392,9 +392,9 @@ class device_handler(object):
         if container_internal == True:
             self.create_node_file_devices("11", self.def_disk_name, 1, bytes_per_node, 
                                           os.path.join(self.exaconf.container_root, self.exaconf.storage_dir),
-                                          False)
+                                          False, no_odirect = no_odirect)
         else:
-            self.create_file_devices(self.def_disk_name, 1, bytes_per_node, "", False)
+            self.create_file_devices(self.def_disk_name, 1, bytes_per_node, "", False, no_odirect = no_odirect)
 
         try:
             # leave some room for the temporary volume!

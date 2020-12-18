@@ -9,8 +9,8 @@ from libexadt.EXAConf import config
 # Flush STDOUT continuously
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
 
-my_version = "7.0.4"
-exaconf="/usr/opt/EXASuite-7/EXAClusterOS-7.0.4/bin/exaconf"
+my_version = "7.0.5"
+exaconf="/usr/opt/EXASuite-7/EXAClusterOS-7.0.5/bin/exaconf"
 info_arc_prefix = "exasol_docker_info"
 confirm_yes = False
 quiet_output = False
@@ -24,6 +24,8 @@ sc_saas = False
 sc_init_sql = None
 sc_sys_passwd = None
 sc_add_sys_passwd = None
+sc_no_db = False
+sc_no_odirect = False
 sc_cluster_name = "cl4"
 sc_image = "exasol/docker-db:latest" #not relevant
 sc_device_type = "file"
@@ -360,12 +362,15 @@ def init_sc(cmd):
     db_version, os_version, re_version, img_version = extract_versions(cmd=cmd,
                                                                        env=os.environ)
     global sc_user, sc_group, sc_saas, sc_init_sql, sc_sys_passwd, sc_add_sys_passwd
+    global sc_no_db, sc_no_odirect
     if cmd.user: sc_user = cmd.user
     if cmd.group: sc_group = cmd.group
     if cmd.saas: sc_saas = cmd.saas
     if cmd.init_sql: sc_init_sql = cmd.init_sql
     if cmd.sys_passwd: sc_sys_passwd = cmd.sys_passwd
     if cmd.add_sys_passwd: sc_add_sys_passwd = cmd.add_sys_passwd
+    if cmd.no_db: sc_no_db = cmd.no_db
+    if cmd.no_odirect: sc_no_odirect = cmd.no_odirect
 
     # 1. Create /exa/etc if it does not exist
     # --> needed in order to create an exaconf instance
@@ -437,6 +442,7 @@ def init_sc(cmd):
                            saas = sc_saas, initial_sql = sc_init_sql,
                            default_sys_passwd_hash = sc_sys_passwd,
                            additional_sys_passwd_hashes = sc_add_sys_passwd,
+                           no_db = sc_no_db, no_odirect = sc_no_odirect,
                            quiet = True, template_mode = cmd.template)
         # Set local IP in EXAConf
         # --> skip in 'template' mode (will probably be replaced anyway)
@@ -519,30 +525,15 @@ def init_sc(cmd):
         log_msg("exadt:: removing '%s'" % cos_auth_socket)
         os.remove(cos_auth_socket)
 
-    # 11. create storage devices and set initial ownership if this is the FIRST start
-    # --> skip file-creation in 'template' mode bt change ownership so the
-    #     files can be modified by the user
-    #     NOTE : changing ownership later may break permission management if
-    #     ownership has been changed by the administrator after the first start.
-    if do_full_init:
-        # i.) create storage devices
-        if not cmd.template:
-            log_msg("exadt:: creating EXAStorage devices")
-            try:
-                devh = device_handler.device_handler(exaconf)
-                devh.auto_create_file_devices(container_internal=True)
-            except device_handler.DeviceError as e:
-                log_err(e)
-                sys.exit(1)
-
-        # ii.) change owner and group of all files and directories below "/exa"
-        log_msg("exadt:: changing file ownership to %i:%i" % (sc_user, sc_group))
-        for root, dirs, files in os.walk(sc_root):
-            os.lchown(root, sc_user, sc_group)
-            for d in dirs:
-                os.lchown(os.path.join(root, d), sc_user, sc_group)
-            for f in files:
-                os.lchown(os.path.join(root, f), sc_user, sc_group)
+    # 11. create storage devices
+    if do_full_init and not cmd.template:
+        log_msg("exadt:: creating EXAStorage devices")
+        try:
+            devh = device_handler.device_handler(exaconf)
+            devh.auto_create_file_devices(container_internal=True, no_odirect = sc_no_odirect)
+        except device_handler.DeviceError as e:
+            log_err(e)
+            sys.exit(1)
 
     # 12. call exainit
     # --> or exit if requested
@@ -1292,6 +1283,16 @@ def main():
             default = False,
             action = 'store_true',
             help="Create an EXAConf template and exit (also prepares '/exa').")
+    parser_isc.add_argument(
+            '--no-db',
+            default = False,
+            action = 'store_true',
+            help='Do not include a DB in the system.')
+    parser_isc.add_argument(
+            '--no-odirect',
+            default = False,
+            action = 'store_true',
+            help='Deactivate O_DIRECT in storage.')
     parser_isc.add_argument(
             '--print-conf', '-p',
             default = False,

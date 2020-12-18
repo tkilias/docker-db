@@ -311,8 +311,8 @@ class EXAConf(object):
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "7.0.4"
-        self.re_version = "7.0.4"
+        self.version = "7.0.5"
+        self.re_version = "7.0.5"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -803,6 +803,7 @@ class EXAConf(object):
                    saas = False, initial_sql = None,
                    default_sys_passwd_hash = None,
                    additional_sys_passwd_hashes = None,
+                   no_db = False, no_odirect = False,
                    quiet = False, template_mode = False):
         """
         Initializes the current EXAConf instance. If 'force' is true, it will be
@@ -905,7 +906,8 @@ class EXAConf(object):
         for node in range (1, num_nodes+1):
             node_id = self.max_reserved_node_id + node
             self.add_node(priv_net = "10.10.10.%i/24" % node_id, nid = node_id,
-                          template_mode = template_mode, commit = False)
+                          no_odirect = no_odirect, template_mode = template_mode,
+                          commit = False)
 
         # EXAStorage sections
         self.config["EXAStorage"] = {}
@@ -918,31 +920,33 @@ class EXAConf(object):
         storage_sec.comments["BgRecEnabled"] = ["Enable or disable background recovery / data restoration (does not affect on-demand recovery)"]
         storage_sec.comments["BgRecLimit"] = ["Max. throughput for background recovery / data restoration (in MiB/s)"]
         storage_sec.comments["SpaceWarnThreshold"] = ["Space usage threshold (in percent, per node) for sending a warning"]
-        # data volume
-        self.add_volume(name = "DataVolume1", vol_type = "data", size = "",
-                        disk = "disk1" if template_mode else "",
-                        redundancy = 1,
-                        nodes = list(self.get_nodes()),
-                        owner = def_owner)
-        # archive volume
-        if add_archive_volume == True:
-            self.add_volume(name = "ArchiveVolume1", vol_type = "archive", size = "",
+
+        if not no_db:
+            # data volume
+            self.add_volume(name = "DataVolume1", vol_type = "data", size = "",
                             disk = "disk1" if template_mode else "",
                             redundancy = 1,
                             nodes = list(self.get_nodes()),
-                            owner = def_owner, shared = True)
-        # DB section
-        self.add_database(name="DB1", version=str(self.db_version),
-                          mem_size="%s GiB" % str(self.get_num_nodes() *2), #2 GiB per node
-                          port = self.def_db_port,
-                          owner = def_owner,
-                          nodes = self.get_nodes(),
-                          num_active_nodes = self.get_num_nodes(),
-                          data_volume = "DataVolume1",
-                          initial_sql = initial_sql,
-                          default_sys_passwd_hash = default_sys_passwd_hash,
-                          additional_sys_passwd_hashes = additional_sys_passwd_hashes,
-                          commit = False)
+                            owner = def_owner)
+            # archive volume
+            if add_archive_volume == True:
+                self.add_volume(name = "ArchiveVolume1", vol_type = "archive", size = "",
+                                disk = "disk1" if template_mode else "",
+                                redundancy = 1,
+                                nodes = list(self.get_nodes()),
+                                owner = def_owner, shared = True)
+            # DB section
+            self.add_database(name="DB1", version=str(self.db_version),
+                              mem_size="%s GiB" % str(self.get_num_nodes() *2), #2 GiB per node
+                              port = self.def_db_port,
+                              owner = def_owner,
+                              nodes = self.get_nodes(),
+                              num_active_nodes = self.get_num_nodes(),
+                              data_volume = "DataVolume1",
+                              initial_sql = initial_sql,
+                              default_sys_passwd_hash = default_sys_passwd_hash,
+                              additional_sys_passwd_hashes = additional_sys_passwd_hashes,
+                              commit = False)
 
         # The default BucketFS
         self.add_bucketfs(bucketfs_name = self.def_bucketfs, owner = def_owner,
@@ -1206,7 +1210,7 @@ class EXAConf(object):
 
     # {{{ Add node
     def add_node(self, priv_net, nid = None, name = None, pub_net = None, UUID = None,
-                 template_mode = False, commit = True):
+                 no_odirect = False, template_mode = False, commit = True):
         """
         Adds a new node to the EXAConf. The ID is determined automatically
         if 'nid' is None. The name is built from the ID if not given.
@@ -1242,8 +1246,9 @@ class EXAConf(object):
         node_sec["UUID"] = gen_node_uuid() if UUID is None  else  UUID
         # Add device template in template mode (given device is ignored)
         if template_mode:
-            node_sec["Disk : disk1"] = {"Devices" : "dev.1 #'dev.1' must be located in '%s'"
-                    % os.path.join(self.container_root, self.storage_dir)}
+            node_sec["Disk : disk1"] = {"Devices" : "dev.1 #'dev.1' must be located in '%s'" % os.path.join(self.container_root, self.storage_dir)}
+            if no_odirect:
+                node_sec["Disk : disk1"]["DirectIO"] = "False"
         # Docker specific options:
         if self.platform_is("Docker"):
             node_sec["DockerVolume"] = "n" + str(node_id)
@@ -3728,7 +3733,7 @@ class EXAConf(object):
 
     # {{{ Add node disk
     def add_node_disk(self, node_id, disk, component = None, devices = None, drives = None,
-                      ephemeral = False, overwrite_existing = False, commit=True):
+                      ephemeral = False, overwrite_existing = False, no_odirect = False, commit=True):
         """
         Adds a new disk to the given node in EXAConf.
 
@@ -3757,6 +3762,8 @@ class EXAConf(object):
         if drives is not None:
             disk_entry.drives = drives
         disk_entry.ephemeral = ephemeral
+        if no_odirect:
+            disk_entry.direct_io = False
         node_conf.disks[disk] = disk_entry
 
         self.set_node_conf(node_conf, node_conf.id, commit)
@@ -3878,6 +3885,8 @@ class EXAConf(object):
         if vol_type and vol_type != "":
             filters["type"] = vol_type
         volumes = self.get_volumes(filters=filters)
+        if len(volumes) == 0:
+            return
         bytes_per_volume_node = bytes_per_node // len(volumes)
 
         for volume in volumes.items():
