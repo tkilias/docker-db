@@ -6,11 +6,11 @@ try:
     from libexadt import util
     assert EXAConfError, util #silence pyflakes
 except ImportError:
-    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.2.13/lib')
+    sys.path.insert(0,'/usr/opt/EXASuite-6/EXAClusterOS-6.2.14/lib')
     from libconfd.common import util
     from libconfd.EXAConf import EXAConfError
 
-my_version = "6.2.13"
+my_version = "6.2.14"
 
 #{{{ log_err
 def log_err(msg):
