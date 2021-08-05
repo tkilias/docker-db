@@ -14,7 +14,7 @@ usage() {
 }
    
 log() { 
-    echo "[$(basename ${0})]: ${*}"
+    echo "[$(date +"%Y-%m-%d %H:%M:%S.%3N")][$(basename ${0})]: ${*}"
 }
      
 die() { 
@@ -69,6 +69,20 @@ wait_db_start() {
         fi
     done
 }
+
+wait_default_slc_extracted() {
+    local sec_wait=600
+    local container=$1
+    local checkslc="cd /usr/opt/EXASuite-*/ScriptLanguages; for slc in 'ScriptLanguages'*; do grep \${slc/://} /exa/logs/cored/bucketfsd.*.log | grep extracted || exit 1; done; exit 0"
+
+    for (( t1=t2=$(date +%s); t2 - t1 < 600; t2=$(date +%s && sleep 1 &>/dev/null) )); do
+        # TODO Lower timeout to 2-5 minutes again when SPOT-12778 is fixed
+
+        "${DOCKER}" exec "${container}" /bin/bash -c "${checkslc}" && return 0
+    done
+
+    die "Bucket did not extract within 10 minutes"
+}
  
 if [[ "$DO_PULL" == "true" ]]; then
     $DOCKER pull "$IMAGE" #does not work with locally built dev-images
@@ -115,7 +129,9 @@ wait_db_start "$CONTAINER"
 log "Checking if the file still exists... "
 if [[ -z $("$DOCKER" exec "$CONTAINER" find /exa -name my_file) ]]; then
     die "File-check failed!"
-fi 
+fi
+log "Checking if bucketfsd extracted default archives"
+wait_default_slc_extracted "$CONTAINER"
 log "Stopping and deleting the container"
 "$DOCKER" stop "$CONTAINER"
 "$DOCKER" rm "$CONTAINER"
