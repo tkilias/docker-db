@@ -256,6 +256,7 @@ class EXAConf(object):
     def_bucketfs = "bfsdefault"
     def_bucket = "default"
     def_bucketfs_sync_period = 30000
+    def_sector_size = 4096
     def_db_port = 8563
     def_license_rawmem_threshold = 80 #percent
     def_bucketfs_http_port = 2580
@@ -311,8 +312,8 @@ class EXAConf(object):
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "7.0.12"
-        self.re_version = "7.0.12"
+        self.version = "7.0.13"
+        self.re_version = "7.0.13"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
