@@ -290,11 +290,12 @@ class EXAConf(object):
     remote_vol_id_offset = 10000
     docker_logs_filename = "docker_logs"
     docker_max_logs_copies = 9
-    def_cored_port = 10001
+    def_cored_port = 325
     def_ssh_port = 22
     def_bucketfs = "bfsdefault"
     def_bucket = "default"
     def_bucketfs_sync_period = 30000
+    def_sector_size = 4096
     def_db_port = 8563
     def_conn_threads = 16
     def_max_conns = 1024
@@ -365,8 +366,8 @@ class EXAConf(object):
         # or taken from the Docker image).
         # The 'version' parameter is static and denotes the version
         # of the EXAConf python module and EXAConf format
-        self.version = "7.1.1"
-        self.re_version = "7.1.1"
+        self.version = "7.1.2"
+        self.re_version = "7.1.2"
         self.set_os_version(self.version)
         self.set_db_version(self.version)
         self.set_re_version(self.re_version)
@@ -551,6 +552,11 @@ class EXAConf(object):
             if EXAVersion(conf_version) < EXAVersion("7.0.0"):
                 ssl_sec = self.config["SSL"]
                 ssl_sec["CertVerify"] = "none"
+            # 7.1.2 Cored filter incoming packets based on port and subnet.
+            if EXAVersion(conf_version) < EXAVersion("7.1.2"):
+                self.set_cored_use_privileged_ports(self.get_cored_use_privileged_ports())
+                self.set_cored_allow_only_same_subnet(self.get_cored_allow_only_same_subnet())
+                self.set_cored_subnets(self.get_cored_subnets())
 
             # always increase version number
             self.config["Global"]["ConfVersion"] = self.version
@@ -1024,12 +1030,19 @@ class EXAConf(object):
         glob_sec["REVersion"] = self.re_version
         glob_sec["DBVersion"] = self.db_version
         glob_sec["ImageVersion"] = self.img_version
+        glob_sec["CoredUsePrivilegedPorts"] = True
+        glob_sec["CoredAllowOnlySameSubnet"] = True
+        glob_sec["CoredSubnets"] = ""
         # comments
         glob_sec.comments["Networks"] = ["List of networks for this cluster: 'private' is mandatory, 'public' is optional."]
         glob_sec.comments["NameServers"] = ["Comma-separated list of nameservers for this cluster."]
         glob_sec.comments["SearchDomains"] = ["Comma-separated list of search domains for this cluster."]
         glob_sec.comments["Hugepages"] = ["Nr. of hugepages ('0' = disabled, 'host' = manually configured on the host, 'auto' = set automatically based on DB config)"]
         glob_sec.comments["C4Socket"] = ["Path to c4 unix domain socket, used for deployments of new clusters and nodes."]
+        glob_sec.comments["CoredUsePrivilegedPorts"] = ["Cored only accepts incomming messages from privileged ports (port number less than 1024)."]
+        glob_sec.comments["CoredAllowOnlySameSubnet"] = ["Cored only accepts incomming messages from its own subnet."]
+        glob_sec.comments["CoredSubnets"] = ["Which subnets Cored will allow messages from. Each subnet must be sepparated by a comma.",
+                                         "A subnet is either an IPv4 or IPv6 address in CIDR notation."]
 
         # SSL section
         self.config["SSL"] = {}
@@ -4171,8 +4184,6 @@ class EXAConf(object):
                     conf.volume_quota = int(units2bytes(db_sec["VolumeQuota"]))
                 if "VolumeMoveDelay" in db_sec.scalars:
                     conf.volume_move_delay = db_sec["VolumeMoveDelay"]
-                if "AutoStart" in db_sec.scalars:
-                    conf.auto_start = db_sec.as_bool("AutoStart")
                 if "InitialSQL" in db_sec.scalars:
                     conf.initial_sql = db_sec["InitialSQL"]
                 if "DefaultSysPasswdHash" in db_sec.scalars:
@@ -4181,9 +4192,15 @@ class EXAConf(object):
                     conf.additional_sys_passwd_hashes = db_sec["AdditionalSysPasswdHashes"]
                 if "BuiltinScriptLanguageName" in db_sec.scalars:
                     conf.builtin_script_language_name = db_sec["BuiltinScriptLanguageName"]
+
                 if "MasterDatabase" in db_sec.scalars:
                     conf.master_database = db_sec["MasterDatabase"]
-                else: conf.auto_start = True
+                    conf.auto_start = False # always disable auto start for worker databases
+                elif "AutoStart" in db_sec.scalars:
+                    conf.auto_start = db_sec.as_bool("AutoStart")
+                else:
+                    conf.auto_start = True # default to autostart for main database clusters
+
                 # JDBC
                 conf["jdbc"] = config()
                 if "JDBC" in db_sec.sections:
@@ -5053,3 +5070,43 @@ class EXAConf(object):
             raise EXAConfError("Failed to check device file '%s': %s" % (dev_file, e))
 
     # }}}
+
+    def has_tree(self, config, tree):
+        if len(tree) < 2:
+            return True
+        if not tree[1] in config[tree[0]]:
+            return False
+        return self.has_tree(config[tree[0]], tree[1:])
+
+
+    def get_cored_use_privileged_ports(self):
+        if self.has_tree(self.config, ["Global", "CoredUsePrivilegedPorts"]):
+            return self.config["Global"].as_bool("CoredUsePrivilegedPorts")
+        else:
+            return False
+
+
+    def set_cored_use_privileged_ports(self, activate: bool):
+        self.config["Global"]["CoredUsePrivilegedPorts"] = bool(activate)
+
+
+    def get_cored_allow_only_same_subnet(self):
+        if self.has_tree(self.config, ["Global", "CoredAllowOnlySameSubnet"]):
+            return self.config["Global"].as_bool("CoredAllowOnlySameSubnet")
+        else:
+            return False
+
+
+    def set_cored_allow_only_same_subnet(self, activate: bool):
+        self.config["Global"]["CoredAllowOnlySameSubnet"] = bool(activate)
+     
+
+    def get_cored_subnets(self):
+        if self.has_tree(self.config, ["Global", "CoredSubnets"]):
+            return self.config["Global"]["CoredSubnets"]
+        else:
+            return ""
+
+
+    def set_cored_subnets(self, subnets: str):
+        self.config["Global"]["CoredSubnets"] = subnets
